@@ -10,7 +10,7 @@ let _ =
        let module H = Helper (struct let loc = loc end) in
        H.(
         let gen   = name_generator (d.name::d.type_args) in
-	let imgs  = map (fun a -> gen#generate (sarg a)) d.type_args in
+	let imgs  = map (fun a -> gen#generate (syn_parameter a)) d.type_args in
         let targs = combine d.type_args imgs in
         {
           inh_t       = T.id "unit"; 

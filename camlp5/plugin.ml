@@ -82,8 +82,8 @@ let rec name_generator list =
   end
 
 let cata          name      = name ^ "_gcata"
-let sarg          name      = "s" ^ name
-let iarg          name      = "i" ^ name
+let syn_parameter type_parameter = "s" ^ type_parameter
+let inh_parameter type_parameter = "i" ^ type_parameter
 let farg          name      = "f" ^ name
 let tname         name      = "t" ^ name
 let cmethod       c         = "c_" ^ c
@@ -107,11 +107,11 @@ let _ =
     "<dir> Add <dir> to the list of include directories."
 
 type properties = {
-    inh_t       : ctyp;
-    syn_t       : ctyp;
-    proper_args : string list;
-    sname       : string -> ctyp;
-    iname       : string -> ctyp;
+    inh_t : ctyp;
+    syn_t : ctyp;
+    transformer_parameters : string list;
+    sname : string -> ctyp;
+    iname : string -> ctyp;
   }
 
 type type_descriptor = {
@@ -120,7 +120,7 @@ type type_descriptor = {
     name       : string;
     default    : properties;
   }
-      
+
 type env = {
     inh      : string;
     subj     : string;
@@ -137,14 +137,14 @@ class virtual generator =
     method virtual record      : env -> (string * (string * bool * typ)) list -> expr
   end
 
-type t = loc -> type_descriptor -> properties * generator 
+type processor = loc -> type_descriptor -> properties * generator
 
 module Helper (L : sig val loc : loc end) =
   struct
-        
+
     open L
 
-    let id lid uid s = 
+    let id lid uid s =
       if String.length s = 0 
       then invalid_arg "Plugin.Helper.id: empty string"
       else (if s.[0] = Char.uppercase s.[0] then uid else lid) s
@@ -196,7 +196,7 @@ module Helper (L : sig val loc : loc end) =
         let less_constr_variant lpv ls = <:ctyp< [ < $list:lpv$ > $list:ls$ ] >>
 
       end
- 
+
     module P =
       struct
 
@@ -235,22 +235,22 @@ module Helper (L : sig val loc : loc end) =
 
       end
 
-    module E = 
+    module E =
       struct
-    
+
         let lid   = (fun s -> <:expr< $lid:s$ >>)
         let uid   = (fun s -> <:expr< $uid:s$ >>)
         let id    = id lid uid
-        let acc   = qname (fun x y -> <:expr< $x$ . $y$ >>) (fun x -> x) 
+        let acc   = qname (fun x y -> <:expr< $x$ . $y$ >>) (fun x -> x)
         let qname = qname (fun x y -> <:expr< $x$ . $y$ >>) id 
 
         let app   = function
         | []    -> invalid_arg "Plugin.Helper.E.app: empty expression list"
         | h::tl -> fold_left (fun a e -> <:expr< $a$ $e$ >>) h tl
-     
+
         let abstr       list       = <:expr< fun [ $list:list$ ] >>
         let func        args body  = fold_right 
-                                       (fun arg expr -> <:expr< fun [ $list:[arg, VaVal None, expr]$ ] >>)                  
+                                       (fun arg expr -> <:expr< fun [ $list:[arg, VaVal None, expr]$ ] >>)
                                        args
                                        body
         let aelem       a i        = <:expr< $a$ . ( $i$ ) >>
@@ -303,16 +303,16 @@ module Helper (L : sig val loc : loc end) =
   end
 
 let generate_classes loc trait descr (prop, generator) (this, env, env_t, b_proto_def, b_def, b_proto_decl, b_decl) =
-  let class_targs = prop.proper_args in 
-  let def n b = { 
+  let class_targs = prop.transformer_parameters in 
+  let def n b = {
     ciLoc = loc;
     ciVir = Ploc.VaVal false;
     ciPrm = (loc, Ploc.VaVal (map (fun a -> Ploc.VaVal (Some a), None) class_targs));
     ciNam = Ploc.VaVal n;
     ciExp = b
-  } 
+  }
   in
-  let ce = 
+  let ce =
     let p = <:patt< $lid:env$ >> in
     <:class_expr< fun $p$ -> $b_proto_def$ >>
   in
@@ -329,7 +329,7 @@ let generate_inherit base_class loc qname arg descr prop =
     then
       flatten (map (fun a -> [<:ctyp< ' $a$ >>; prop.iname a; prop.sname a]) descr.type_args) @
       [prop.inh_t; prop.syn_t] 
-    else map (fun a -> <:ctyp< ' $a$ >>) prop.proper_args
+    else map (fun a -> <:ctyp< ' $a$ >>) prop.transformer_parameters
   in
   let ce = 
     let ce = match args with [] -> <:class_expr< $list:qname$ >> | _ -> <:class_expr< [ $list:args$ ] $list:qname$ >> in
@@ -353,7 +353,7 @@ let generate_inherit base_class loc qname arg descr prop =
   <:class_str_item< inherit $ce$ >>,
   <:class_sig_item< inherit $ct$ >>
 
-module M = 
+module StringMap =
   struct
     type 'a t = (string * 'a) list
 
@@ -362,56 +362,40 @@ module M =
     let find         = assoc
     let mem name   l = try (ignore (find name l)); true with Not_found -> false
   end
-    
-let m : t M.t ref = ref M.empty
 
-let register name t =
-  let generalize t = t 
-(*
-    fun loc descr ->
-      let module H = Helper (struct let loc = loc end) in
-      let (prop, gen) as return = t loc descr in
-      match prop.inh_t with
-      | `Mono _ -> return
-      | `Poly (inh, f) ->
-	  let ng = name_generator prop.proper_args in
-	  let t = ng#generate "t" in
-	  let inh_t =
-	    let tags_name = tags_open_t descr.name in
-	    let args = (H.T.var t) :: inh :: map f descr.type_args in
-	    H.T.app (H.T.id tags_name :: args)
-	  in
-	  {prop with proper_args = t :: prop.proper_args; inh_t = `Poly (inh_t, f)}, gen
-*)
-  in
-  if not (M.mem name !m) 
-  then m := M.add name (generalize t) !m
+let plugin_processors : processor StringMap.t ref = ref StringMap.empty
+
+let register name processor =
+  if not (StringMap.mem name !plugin_processors)
+  then plugin_processors := StringMap.add name processor !plugin_processors
 
 let get name =
-  if not (M.mem name !m) then None else Some (M.find name !m)
+  if (StringMap.mem name !plugin_processors)
+  then Some (StringMap.find name !plugin_processors)
+  else None
 
-let load_plugins names =
+let load_plugins plugin_names =
   let load_one name =
     match get name with
     | None ->
         let filename = name ^ ".cmo" in
-        let ok = 
-          fold_left 
-            (fun ok path -> 
+        let ok =
+          fold_left
+            (fun ok path ->
               if not ok then
                 let fullname = Filename.concat path filename in
-                try 
-                  loadfile fullname; 
+                try
+                  loadfile fullname;
                   true
-                with 
+                with
                 | Error (File_not_found _) -> false
                 | Error err -> Pervasives.raise (Bad_plugin (error_message err))
-              else ok         
-            ) 
-            false 
+              else ok
+            )
+            false
             !load_path
         in
-        if not ok 
+        if not ok
         then Pervasives.raise (Bad_plugin (sprintf "Plugin \"%s\" bytecode file not found" name))
         else begin
           match get name with
@@ -420,4 +404,4 @@ let load_plugins names =
         end
     | Some _ -> ()
   in
-  iter load_one names
+  iter load_one plugin_names
