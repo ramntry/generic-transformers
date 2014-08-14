@@ -12,7 +12,7 @@ let _ =
         {
           inh_t = T.id "unit";
           syn_t = T.id "string";
-          transformer_parameters = descriptor.type_args;
+          transformer_parameters = descriptor.parameters;
           inh_t_of_parameter = (fun _ -> T.id "unit");
           syn_t_of_parameter = (fun _ -> T.id "string");
         },

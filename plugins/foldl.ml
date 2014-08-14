@@ -9,12 +9,12 @@ let _ =
     (fun loc descriptor ->
        let module H = Helper (struct let loc = loc end) in
        H.(
-        let gen   = name_generator (descriptor.name :: descriptor.type_args) in
+        let gen   = name_generator (descriptor.name :: descriptor.parameters) in
         let syn   = gen#generate "syn" in
         {
           inh_t = T.var syn;
           syn_t = T.var syn;
-          transformer_parameters = descriptor.type_args @ [syn];
+          transformer_parameters = descriptor.parameters @ [syn];
           syn_t_of_parameter = (fun _ -> T.var syn);
           inh_t_of_parameter = (fun _ -> T.var syn);
         },

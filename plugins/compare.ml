@@ -12,16 +12,16 @@ exception Found of int
 let _ =
   register "compare" (fun loc descriptor ->
     let module H = Helper (struct let loc = loc end) in
-    let ng   = name_generator descriptor.type_args in
+    let ng   = name_generator descriptor.parameters in
     let self = ng#generate "self" in
     H.(
       {
         inh_t =
           if descriptor.is_polyvar
-          then T.app (T.id (type_open_t descriptor.name) :: map T.var (self :: descriptor.type_args))
-          else T.app (T.id descriptor.name :: map T.var descriptor.type_args);
+          then T.app (T.id (type_open_t descriptor.name) :: map T.var (self :: descriptor.parameters))
+          else T.app (T.id descriptor.name :: map T.var descriptor.parameters);
         syn_t = <:ctyp< GT.comparison >>;
-        transformer_parameters = if descriptor.is_polyvar then self :: descriptor.type_args else descriptor.type_args;
+        transformer_parameters = if descriptor.is_polyvar then self :: descriptor.parameters else descriptor.parameters;
         inh_t_of_parameter = (fun type_parameter -> T.var type_parameter);
         syn_t_of_parameter = (fun _ -> <:ctyp< GT.comparison >>);
       },

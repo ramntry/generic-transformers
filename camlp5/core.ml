@@ -121,38 +121,38 @@ let generate tdecl_descr_list loc =
           type_parameter,
           (generator#generate (inh_parameter type_parameter), generator#generate (syn_parameter type_parameter)))
       in
-      let attribute_parameters_for type_parameter =
+      let attribute_parameters_of type_parameter =
         try assoc type_parameter attribute_parameters
         with Not_found -> oops loc "type variable image not found (should not happen)"
       in
-      let inh_parameter name = fst (attribute_parameters_for name) in
-      let sname name = snd (attribute_parameters_for name) in
+      let inh_parameter_of type_parameter = fst (attribute_parameters_of type_parameter) in
+      let syn_parameter_of type_parameter = snd (attribute_parameters_of type_parameter) in
       let inh = generator#generate "inh" in
       let syn = generator#generate "syn" in
       let transformer_parameters =
         (attribute_parameters |> map (fun (param, (inh_param, syn_param)) -> [param; inh_param; syn_param]) |> flatten)
         @ [inh; syn]
       in
-      let plugin_descriptor  = {
-        Plugin.is_polyvar = is_polyvar;
-        type_args = type_parameters;
+      let type_descriptor  = {
+        is_polyvar = is_polyvar;
+        parameters = type_parameters;
         name = type_name;
         default = {
           inh_t = H.T.var inh;
           syn_t = H.T.var syn;
           transformer_parameters = transformer_parameters;
-          syn_t_of_parameter = (fun type_parameter -> H.T.var (sname type_parameter));
-          inh_t_of_parameter = (fun type_parameter -> H.T.var (inh_parameter type_parameter));
+          syn_t_of_parameter = (fun type_parameter -> H.T.var (syn_parameter_of type_parameter));
+          inh_t_of_parameter = (fun type_parameter -> H.T.var (inh_parameter_of type_parameter));
         };
       }
       in
-      let derived  = map (fun name -> name, (option loc (Plugin.get name)) loc plugin_descriptor) plugin_names in
+      let derived  = map (fun name -> name, (option loc (Plugin.get name)) loc type_descriptor) plugin_names in
       let tpo_name = generator#generate "tpo" in
       let self_name = generator#generate "self" in
       let tpo      =
         H.E.obj None (map (fun a -> <:class_str_item< method $lid:a$ = $H.E.id (farg a)$ >>) type_parameters)
       in
-      let tpf = map (fun a -> H.T.arrow (map H.T.var [inh_parameter a; a; sname a])) type_parameters in
+      let tpf = map (fun a -> H.T.arrow (map H.T.var [inh_parameter_of a; a; syn_parameter_of a])) type_parameters in
       let tpt = H.T.obj (combine type_parameters tpf) false in
       let catype =
         let typ = H.T.app (H.T.id type_name :: map H.T.var type_parameters) in
@@ -203,7 +203,7 @@ let generate tdecl_descr_list loc =
         (fun () -> !method_defs),
         (fun () ->
           (!method_decls |> map (fun (name, (_, (args, t))) ->
-           let targs   = map (fun a -> H.T.arrow [H.T.var (inh_parameter a); H.T.var a; H.T.var (sname a)]) args in
+           let targs   = map (fun a -> H.T.arrow [H.T.var (inh_parameter_of a); H.T.var a; H.T.var (syn_parameter_of a)]) args in
            let msig    = H.T.arrow (targs @ [H.T.var inh; t; H.T.var syn]) in
            <:class_str_item< method virtual $lid:tmethod name$ : $msig$ >>,
            <:class_sig_item< method $lid:tmethod name$ : $msig$ >>)))
@@ -247,23 +247,25 @@ let generate tdecl_descr_list loc =
                       let attribute_parameters = map (fun param ->
                         param, (g#generate (inh_parameter param), g#generate (syn_parameter param))) args
                       in
-                      let plugin_descriptor  = {
-                        Plugin.is_polyvar = false;
-                        type_args  = args;
+                      let type_descriptor  = {
+                        is_polyvar = false;
+                        parameters = args;
                         name = t;
                         default = {
-                          inh_t       = H.T.var inh;
-                          syn_t       = H.T.var syn;
+                          inh_t = H.T.var inh;
+                          syn_t = H.T.var syn;
                           transformer_parameters = args;
                           syn_t_of_parameter = (fun type_parameter -> H.T.var (snd (assoc type_parameter attribute_parameters)));
                           inh_t_of_parameter = (fun type_parameter -> H.T.var (fst (assoc type_parameter attribute_parameters)));
                         };
                       }
                       in
-                      let prop, _ = (option loc (Plugin.get trait)) loc plugin_descriptor in
+                      let prop, _ = (option loc (Plugin.get trait)) loc type_descriptor in
                       let typ     = H.T.app (H.T.id t :: map H.T.var args) in
                       let inh_t   = prop.Plugin.inh_t in
-                      let targs = map (fun a -> H.T.arrow [prop.Plugin.inh_t_of_parameter a; H.T.var a; prop.Plugin.syn_t_of_parameter a]) plugin_descriptor.Plugin.type_args in
+                      let targs = map (fun a ->
+                        H.T.arrow [prop.Plugin.inh_t_of_parameter a; H.T.var a; prop.Plugin.syn_t_of_parameter a]) type_descriptor.parameters
+                      in
                       let mtype   = H.T.arrow (targs @ [inh_t; typ; prop.Plugin.syn_t]) in
                       <:class_str_item< value mutable $lid:ct$ = $H.E.app [obj_magic; H.E.unit]$ >>,
                       (H.E.assign (H.E.id ct) (H.E.app [H.E.new_e [proto_t]; H.E.id self])),
@@ -274,7 +276,7 @@ let generate tdecl_descr_list loc =
                  )
                 in
                 let items =
-                  let prop, _ = (option loc (Plugin.get trait)) loc plugin_descriptor in
+                  let prop, _ = (option loc (Plugin.get trait)) loc type_descriptor in
                   let this    = H.E.coerce (H.E.id this) (H.T.app (H.T.id (trait_t type_name trait)::map H.T.var prop.Plugin.transformer_parameters)) in
                   vals @ [<:class_str_item< initializer $H.E.seq (H.E.app [H.E.lid ":="; H.E.id self; this]::inits)$ >>] @ methods
                 in
@@ -358,8 +360,8 @@ let generate tdecl_descr_list loc =
                   n
                 in
                 let descr = {
-                  Plugin.is_polyvar = is_polyvar;
-                  type_args = args;
+                  is_polyvar = is_polyvar;
+                  parameters = args;
                   name = name;
                   default = prop;
                 }
@@ -380,9 +382,9 @@ let generate tdecl_descr_list loc =
         ),
         (fun (trait, p) ->
            let context = M.get trait in
-           let i_def, _ = Plugin.generate_inherit true  loc [class_t  type_name] None plugin_descriptor (fst p) in
-           let _ , i_decl = Plugin.generate_inherit true  loc [class_tt type_name] None plugin_descriptor (fst p) in
-           let p_def, _ = Plugin.generate_inherit false loc [trait_proto_t type_name trait] (Some (H.E.id context.M.self, H.T.id "unit")) plugin_descriptor (fst p) in
+           let i_def, _ = Plugin.generate_inherit true  loc [class_t  type_name] None type_descriptor (fst p) in
+           let _ , i_decl = Plugin.generate_inherit true  loc [class_tt type_name] None type_descriptor (fst p) in
+           let p_def, _ = Plugin.generate_inherit false loc [trait_proto_t type_name trait] (Some (H.E.id context.M.self, H.T.id "unit")) type_descriptor (fst p) in
            let cproto = <:class_expr< object ($H.P.id context.M.this$) $list:i_def::context.M.proto_items$ end >> in
            let ce =
              let ce = <:class_expr< object ($H.P.id context.M.this$) $list:i_def::p_def::context.M.defaults@context.M.items$ end >> in
@@ -400,7 +402,7 @@ let generate tdecl_descr_list loc =
              let env_inh = <:class_sig_item< inherit $ct$ >> in
              <:class_type< object $list:[i_decl; env_inh]$ end >>
            in
-           Plugin.generate_classes loc trait plugin_descriptor p (context.M.this, context.M.env, env_t, cproto, ce, cproto_t, ct)
+           Plugin.generate_classes loc trait type_descriptor p (context.M.this, context.M.env, env_t, cproto, ce, cproto_t, ct)
         )
       in
       let match_cases =
@@ -409,7 +411,7 @@ let generate tdecl_descr_list loc =
             let make_a x y z = H.T.app [<:ctyp< GT.a >>; x; y; z; tpt] in
             let rec make_typ = function
             | Arbitrary t | Instance (t, _, _) -> t
-            | Variable (t, name) -> make_a (H.T.var (inh_parameter name)) t (H.T.var (sname name))
+            | Variable (t, name) -> make_a (H.T.var (inh_parameter_of name)) t (H.T.var (syn_parameter_of name))
             | Self     (t, _, _) -> make_a (H.T.var inh) t (H.T.var syn)
             | Tuple    (t, typs) -> H.T.tuple (map make_typ typs)
             in
@@ -485,7 +487,7 @@ let generate tdecl_descr_list loc =
            | `Type (Instance (_, args, qname)) as case ->
                let args = map (function Variable (_, a) -> a | _ -> oops loc "unsupported case (non-variable in instance)") args in (* TODO *)
                iter (add_derived_member case) derived;
-               let targs = flatten (map (fun a -> [a; inh_parameter a; sname a]) args) @ [inh; syn] in
+               let targs = flatten (map (fun a -> [a; inh_parameter_of a; syn_parameter_of a]) args) @ [inh; syn] in
                let targs = map H.T.var targs in
                let ce    = <:class_expr< [ $list:targs$ ] $list:map_last loc class_t qname$ >> in
                let ct f  =

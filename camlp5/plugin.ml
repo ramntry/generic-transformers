@@ -81,7 +81,7 @@ let rec name_generator list =
       )
   end
 
-let cata          name      = name ^ "_gcata"
+let cata type_name = type_name ^ "_gcata"
 let syn_parameter type_parameter = "s" ^ type_parameter
 let inh_parameter type_parameter = "i" ^ type_parameter
 let farg          name      = "f" ^ name
@@ -96,39 +96,39 @@ let trait_proto_t typ trait = sprintf "%s_proto_%s" trait typ
 let env_tt        typ trait = trait ^ "_" ^ typ ^ "_env_tt"
 let tags_t        typ       = typ ^ "_tags"
 let type_open_t   typ       = typ ^ "_open"
-let rewrap_t      n typ     = "rewrap_" ^ typ ^ (if n = 0 then "" else string_of_int n)
-let wrap_t        n typ     = "wrap_" ^ typ ^ (if n = 0 then "" else string_of_int n)
 
 let load_path = ref []
 
-let _ =
+let () =
   Pcaml.add_option "-L"
     (Arg.String (fun dir -> load_path := !load_path @ [dir]))
     "<dir> Add <dir> to the list of include directories."
 
 type parameter = string
+type type_name = string
+type plugin_name = string
 
 type properties = {
-    inh_t : ctyp;
-    syn_t : ctyp;
-    transformer_parameters : parameter list;
-    inh_t_of_parameter : parameter -> ctyp;
-    syn_t_of_parameter : parameter -> ctyp;
-  }
+  inh_t : ctyp;
+  syn_t : ctyp;
+  transformer_parameters : parameter list;
+  inh_t_of_parameter : parameter -> ctyp;
+  syn_t_of_parameter : parameter -> ctyp;
+}
 
 type type_descriptor = {
-    is_polyvar : bool;
-    type_args  : string list;
-    name       : string;
-    default    : properties;
-  }
+  is_polyvar : bool;
+  parameters : parameter list;
+  name : type_name;
+  default : properties;
+}
 
 type env = {
-    inh      : string;
-    subj     : string;
-    new_name : string -> string;
-    trait    : string -> typ -> expr option;
-  }
+  inh : string;
+  subj : string;
+  new_name : string -> string;
+  trait : plugin_name -> typ -> expr option;
+}
 
 class virtual generator =
   object
@@ -329,7 +329,7 @@ let generate_inherit base_class loc qname arg descr prop =
   let args =
     if base_class 
     then
-      flatten (map (fun a -> [<:ctyp< ' $a$ >>; prop.inh_t_of_parameter a; prop.syn_t_of_parameter a]) descr.type_args) @
+      flatten (map (fun a -> [<:ctyp< ' $a$ >>; prop.inh_t_of_parameter a; prop.syn_t_of_parameter a]) descr.parameters) @
       [prop.inh_t; prop.syn_t] 
     else map (fun a -> <:ctyp< ' $a$ >>) prop.transformer_parameters
   in

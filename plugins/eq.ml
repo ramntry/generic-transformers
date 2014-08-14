@@ -13,14 +13,14 @@ let _ =
     (fun loc descriptor ->
        let module H = Helper (struct let loc = loc end) in
        H.(
-        let ng   = name_generator descriptor.type_args in
+        let ng   = name_generator descriptor.parameters in
         let self = ng#generate "self" in
         {
           inh_t = if descriptor.is_polyvar
-                  then T.app (T.id (type_open_t descriptor.name) :: map T.var (self :: descriptor.type_args))
-                  else T.app (T.id descriptor.name :: map T.var descriptor.type_args);
+                  then T.app (T.id (type_open_t descriptor.name) :: map T.var (self :: descriptor.parameters))
+                  else T.app (T.id descriptor.name :: map T.var descriptor.parameters);
           syn_t = T.id "bool";
-          transformer_parameters = if descriptor.is_polyvar then self :: descriptor.type_args else descriptor.type_args;
+          transformer_parameters = if descriptor.is_polyvar then self :: descriptor.parameters else descriptor.parameters;
           inh_t_of_parameter = (fun a -> T.var a);
           syn_t_of_parameter = (fun _ -> T.id "bool");
         },

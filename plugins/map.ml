@@ -9,9 +9,9 @@ let _ =
     (fun loc descriptor ->
        let module H = Helper (struct let loc = loc end) in
        H.(
-        let gen   = name_generator (descriptor.name :: descriptor.type_args) in
-        let imgs  = map (fun a -> gen#generate (syn_parameter a)) descriptor.type_args in
-        let targs = combine descriptor.type_args imgs in
+        let gen   = name_generator (descriptor.name :: descriptor.parameters) in
+        let imgs  = map (fun a -> gen#generate (syn_parameter a)) descriptor.parameters in
+        let targs = combine descriptor.parameters imgs in
         {
           inh_t = T.id "unit";
           syn_t = T.app (T.id descriptor.name :: map T.var imgs);
