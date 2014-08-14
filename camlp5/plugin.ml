@@ -106,12 +106,14 @@ let _ =
     (Arg.String (fun dir -> load_path := !load_path @ [dir]))
     "<dir> Add <dir> to the list of include directories."
 
+type parameter = string
+
 type properties = {
     inh_t : ctyp;
     syn_t : ctyp;
-    transformer_parameters : string list;
-    sname : string -> ctyp;
-    iname : string -> ctyp;
+    transformer_parameters : parameter list;
+    inh_t_of_parameter : parameter -> ctyp;
+    syn_t_of_parameter : parameter -> ctyp;
   }
 
 type type_descriptor = {
@@ -132,7 +134,7 @@ class virtual generator =
   object
     method header     = ([] : str_item list)
     method header_sig = ([] : sig_item list)
-    method virtual constructor : env -> string -> (string * typ) list -> expr 
+    method virtual constructor : env -> string -> (string * typ) list -> expr
     method virtual tuple       : env -> (string * typ) list -> expr
     method virtual record      : env -> (string * (string * bool * typ)) list -> expr
   end
@@ -327,7 +329,7 @@ let generate_inherit base_class loc qname arg descr prop =
   let args =
     if base_class 
     then
-      flatten (map (fun a -> [<:ctyp< ' $a$ >>; prop.iname a; prop.sname a]) descr.type_args) @
+      flatten (map (fun a -> [<:ctyp< ' $a$ >>; prop.inh_t_of_parameter a; prop.syn_t_of_parameter a]) descr.type_args) @
       [prop.inh_t; prop.syn_t] 
     else map (fun a -> <:ctyp< ' $a$ >>) prop.transformer_parameters
   in
