@@ -1,0 +1,5 @@
+version = ""
+description = ""
+requires = ""
+archive(byte) = "GT.cma"
+archive(native) = "GT.cmxa"
