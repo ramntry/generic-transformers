@@ -3,7 +3,7 @@
 *.cmx[oa]
 *.o
 *.a
-regression/test???
+regression/test[0-9]??
 regression/test???.log
 Makefile.in
 Makefile
