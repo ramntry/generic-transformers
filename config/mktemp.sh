@@ -25,6 +25,7 @@
 # currently does not check that the files it is creating did not exist
 # previously and it does not verify that it successfully creates the
 # files it returns the names of.
+
 mktemp() {
 	if test x"$1" = x-d; then
 		tmp=`echo $2 |sed "s/XXXXXX/$$/"`

@@ -13,6 +13,10 @@ autom4te.cache
 config.log
 config.status
 *.pp
+aclocal.m4
+configure
+config/*
+config/!mktemp.sh
 
 create_new_test.sh
 check.sh
