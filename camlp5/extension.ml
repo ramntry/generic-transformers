@@ -29,109 +29,9 @@ open Printf
 open Pcaml
 open MLast
 open Ploc
-open Plugin
-open Core
-
-let type_decl_to_description loc t =
-  let name = get_val loc (snd (get_val loc t.tdNam)) in
-  let args =
-    map (fun (x, _) ->
-           match get_val loc x with
-           | Some y -> y
-           | None   -> oops loc "wildcard type parameters not supported"
-        )
-        (get_val loc t.tdPrm)
-  in
-  let convert =
-    let convert_concrete typ =
-      let rec inner = function
-      | <:ctyp< ( $list:typs$ ) >> as typ -> Tuple (typ, map inner typs)
-      | <:ctyp< ' $a$ >> as typ -> Variable (typ, a)
-      | <:ctyp< $t$ $a$ >> as typ ->
-          (match inner t, inner a with
-           | _, Arbitrary _ -> Arbitrary typ
-           | Instance (_, targs, tname), a -> Instance (typ, targs@[a], tname)
-           | _ -> Arbitrary typ
-          )
-      | <:ctyp< $q$ . $t$ >> as typ ->
-          (match inner q, inner t with
-           | Instance (_, [], q), Instance (_, [], t) -> Instance (typ, [], q@t)
-           | _ -> Arbitrary typ
-          )
-      | (<:ctyp< $uid:n$ >> | <:ctyp< $lid:n$ >>) as typ -> Instance (typ, [], [n]) | t -> Arbitrary t
-      in
-      let rec replace = function
-      | Tuple (t, typs) -> Tuple (t, map replace typs)
-      | Instance (t, args', qname) as orig when qname = [name] ->
-         (try
-           let args' =
-             map (function
-                  | Variable (_, a) -> a
-                  | _ -> invalid_arg "Not a variable"
-                 )
-                 args'
-           in
-           if args' = args then Self (t, args, qname) else orig
-          with Invalid_argument "Not a variable" -> orig
-         )
-      | x -> x
-      in
-      replace (inner typ)
-    in
-    function
-    | <:ctyp< [ $list:const$ ] >> | <:ctyp< $_$ == $priv:_$ [ $list:const$ ] >> ->
-        let const = map (fun (loc, name, args, d) ->
-                           match d with
-                           | None -> `Constructor (get_val loc name, map convert_concrete (get_val loc args))
-                           | _    -> oops loc "unsupported constructor declaration"
-                        )
-                    const
-        in
-        `Variant const
-
-    | <:ctyp< { $list:fields$ } >> | <:ctyp< $_$ == $priv:_$ { $list:fields$ } >> ->
-        let fields = map (fun (_, name, mut, typ) -> name, mut, convert_concrete typ) fields in
-        `Record fields
-
-    | <:ctyp< ( $list:typs$ ) >> -> `Tuple (map convert_concrete typs)
-
-    | <:ctyp< [ = $list:variants$ ] >> ->
-        let wow ()   = oops loc "unsupported polymorphic variant type constructor declaration" in
-        let variants =
-          map (function
-               | <:poly_variant< $typ$ >> ->
-                  (match convert_concrete typ with
-                   | Arbitrary _ -> wow ()
-                   | typ -> `Type typ
-                  )
-               | <:poly_variant< ` $c$ >> -> `Constructor (c, [])
-               | <:poly_variant< ` $c$ of $list:typs$ >> ->
-                   let typs =
-                     flatten (
-                       map (function
-                            | <:ctyp< ( $list:typs$ ) >> -> map convert_concrete typs
-                            | typ -> [convert_concrete typ]
-                           )
-                           typs
-                     )
-                   in
-                   `Constructor (c, typs)
-               | _ -> wow ()
-              )
-            variants
-        in
-        `PolymorphicVariant variants
-
-    | typ -> (
-        match convert_concrete typ with
-        | Arbitrary _ -> oops loc "unsupported type"
-        | typ         -> `Variant [match typ with Variable (t, _) -> `Tuple [Tuple (<:ctyp< ($list:[t]$) >>, [typ])] | _ -> `Type typ]
-        )
-  in
-  (args, name, convert t.tdDef)
 
 let from_option ~default = function
-  | Some some_value -> some_value
+  | Some v -> v
   | None -> default
 
 EXTEND
@@ -155,36 +55,50 @@ EXTEND
 
   class_longident: [[
     "@"; ci=qname; t=OPT trait ->
-      let n, q = hdtl loc (rev ci) in
-      rev ((match t with None -> class_t n | Some t -> trait_t t n)::q)
+      let n, q = Plugin.hdtl loc (rev ci) in
+      rev ((match t with None -> Plugin.class_t n | Some t -> Plugin.trait_t t n)::q)
 
   | "+"; ci=qname; t=trait ->
-      let n, q = hdtl loc (rev ci) in
-      rev ((trait_proto_t t n) :: q)
+      let n, q = Plugin.hdtl loc (rev ci) in
+      rev ((Plugin.trait_proto_t t n) :: q)
 
   | ci=qname -> ci
   ]];
 
   qname: [[
-    n=LIDENT              -> [n]
-  | m=UIDENT; "."; q=SELF -> m :: q
+    n = LIDENT              -> [n]
+  | m = UIDENT; "."; q=SELF -> m :: q
   ]];
 
-  trait: [[ "["; id=LIDENT; "]" -> id ]];
+  trait: [[
+    "["; id = LIDENT; "]" ->
+      id
+  ]];
 
   str_item: LEVEL "top" [[
-    "@"; "type"; t=LIST1 t_decl SEP "and" -> fst (generate t loc)
+    "@"; "type"; mut_rec_type_decls = LIST1 type_decl_with_escape_or_deriving SEP "and" ->
+      fst (Core.generate loc mut_rec_type_decls)
   ]];
 
   sig_item: LEVEL "top" [[
-    "@"; "type"; t=LIST1 t_decl SEP "and" -> snd (generate t loc)
+    "@"; "type"; mut_rec_type_decls = LIST1 type_decl_with_escape_or_deriving SEP "and" ->
+      snd (Core.generate loc mut_rec_type_decls)
   ]];
 
-  t_decl: [[
-    "["; t=type_decl; "]" -> (t, [])
-  | t=type_decl; d=OPT deriving -> (t, [type_decl_to_description loc t, from_option ~default:[] d])
+type_decl_with_escape_or_deriving: [[
+  (** An escape declaration for non-supported cases. Will be ignored by the framework. *)
+    "["; type_declaration = type_decl; "]" ->
+      (loc, type_declaration, None)
+
+  (** An ordinary type declaration. If list of plugin names is empty only a generic traversal function and an abstract
+   *  transformer class and auxiliary class types will be generated, otherwise the plugins code as well *)
+  | type_declaration = type_decl; maybe_plugin_names = OPT with_annotation ->
+      (loc, type_declaration, Some (from_option ~default:[] maybe_plugin_names))
   ]];
 
-  deriving: [["with"; s=LIST1 LIDENT SEP "," -> s]];
+  with_annotation: [[
+    "with"; plugin_names = LIST1 LIDENT SEP "," ->
+      plugin_names
+  ]];
 
 END;

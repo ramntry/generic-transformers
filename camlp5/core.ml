@@ -49,6 +49,8 @@ let split6 l =
 
 let apply_to2 arg1 arg2 func = func arg1 arg2
 
+let snd3 (_, elem2, _) = elem2
+
 let ctyp_of_qname loc qname =
   let module H = Plugin.Helper (struct let loc = loc end) in H.T.acc (map H.T.id qname)
 
@@ -57,27 +59,148 @@ let ctyp_of_instance loc args qname =
   H.T.app (qname :: args)
 
 let from_option_with_error loc = function
-| Some p -> p
-| _      -> oops loc "empty option (should not happen)"
+| Some v -> v
+| _ -> oops loc "empty option (should not happen)"
 
-let generate tdecl_descr_list loc =
-  let module H = Plugin.Helper (struct let loc = loc end) in
-  let obj_magic = <:expr< Obj.magic >> in
-  let tdecls, d = split tdecl_descr_list in
-  let descrs = flatten d in
-  let mut_rec_decls =
-    descrs |> map (fun ((type_parameters, type_name, descr), _plugin_names) -> type_parameters, type_name)
+(* Everywhere
+ *     'parameter' stands for type parameter of some type (or class, or class type etc).
+ *     'type' - currently being processed type declaration or its name etc.
+ *     'type_decl' - Camlp5 record representing OCaml type declaration.
+ *)
+
+let name_of_type_decl loc type_decl =
+  from_vaval loc (snd (from_vaval loc type_decl.tdNam))
+
+let parameters_of_type_decl loc type_decl =
+  from_vaval loc type_decl.tdPrm
+  |> map (fun (type_variable, _covariant_flags) ->
+      match from_vaval loc type_variable with
+      | Some type_parameter -> type_parameter
+      | None -> oops loc "wildcard type parameters not supported"
+      )
+
+let type_decl_to_description loc td =
+  let type_name = name_of_type_decl loc td in
+  let type_parameters = parameters_of_type_decl loc td in
+  let convert =
+    let convert_concrete typ =
+      let rec inner = function
+      | <:ctyp< ( $list:typs$ ) >> as typ -> Tuple (typ, map inner typs)
+      | <:ctyp< ' $a$ >> as typ -> Variable (typ, a)
+      | <:ctyp< $t$ $a$ >> as typ ->
+          (match inner t, inner a with
+           | _, Arbitrary _ -> Arbitrary typ
+           | Instance (_, targs, tname), a -> Instance (typ, targs@[a], tname)
+           | _ -> Arbitrary typ
+          )
+      | <:ctyp< $q$ . $t$ >> as typ ->
+          (match inner q, inner t with
+           | Instance (_, [], q), Instance (_, [], t) -> Instance (typ, [], q@t)
+           | _ -> Arbitrary typ
+          )
+      | (<:ctyp< $uid:n$ >> | <:ctyp< $lid:n$ >>) as typ -> Instance (typ, [], [n]) | td-> Arbitrary td
+      in
+      let rec replace = function
+      | Tuple (t, typs) -> Tuple (t, map replace typs)
+      | Instance (t, params, qname) as orig when qname = [type_name] ->
+         (try
+           let params =
+             map (function
+                  | Variable (_, a) -> a
+                  | _ -> invalid_arg "Not a variable"
+                 )
+                 params
+           in
+           if params = type_parameters then Self (t, type_parameters, qname) else orig
+          with Invalid_argument "Not a variable" -> orig
+         )
+      | x -> x
+      in
+      replace (inner typ)
+    in
+    function
+    | <:ctyp< [ $list:const$ ] >> | <:ctyp< $_$ == $priv:_$ [ $list:const$ ] >> ->
+        let const = map (fun (loc, name, args, d) ->
+                           match d with
+                           | None -> `Constructor (from_vaval loc name, map convert_concrete (from_vaval loc args))
+                           | _    -> oops loc "unsupported constructor declaration"
+                        )
+                    const
+        in
+        `Variant const
+
+    | <:ctyp< { $list:fields$ } >> | <:ctyp< $_$ == $priv:_$ { $list:fields$ } >> ->
+        let fields = map (fun (_, name, mut, typ) -> name, mut, convert_concrete typ) fields in
+        `Record fields
+
+    | <:ctyp< ( $list:typs$ ) >> -> `Tuple (map convert_concrete typs)
+
+    | <:ctyp< [ = $list:variants$ ] >> ->
+        let wow ()   = oops loc "unsupported polymorphic variant type constructor declaration" in
+        let variants =
+          map (function
+               | <:poly_variant< $typ$ >> ->
+                  (match convert_concrete typ with
+                   | Arbitrary _ -> wow ()
+                   | typ -> `Type typ
+                  )
+               | <:poly_variant< ` $c$ >> -> `Constructor (c, [])
+               | <:poly_variant< ` $c$ of $list:typs$ >> ->
+                   let typs =
+                     flatten (
+                       map (function
+                            | <:ctyp< ( $list:typs$ ) >> -> map convert_concrete typs
+                            | typ -> [convert_concrete typ]
+                           )
+                           typs
+                     )
+                   in
+                   `Constructor (c, typs)
+               | _ -> wow ()
+              )
+            variants
+        in
+        `PolymorphicVariant variants
+
+    | typ -> (
+        match convert_concrete typ with
+        | Arbitrary _ -> oops loc "unsupported type"
+        | typ         -> `Variant [match typ with Variable (t, _) -> `Tuple [Tuple (<:ctyp< ($list:[t]$) >>, [typ])] | _ -> `Type typ]
+        )
   in
+  (type_name, type_parameters, convert td.tdDef)
+
+let make_descrs mut_rec_type_decls =
+  mut_rec_type_decls
+  |> map (fun (loc, type_decl, request) ->
+    match request with
+    | Some plugin_names ->
+        let (type_name, type_parameters, description) = type_decl_to_description loc type_decl in
+        [(type_name, (type_parameters, description, plugin_names))]
+    | None -> []
+    )
+  |> flatten
+
+(** mut_rec_type_decls argument is a group of mutual recursive type declarations, in which each element is original
+ *  OCaml type declaration and an optional list of plugin names.
+ *  If list is present (and maybe empty), the framework will generate a generic traversal function and an abstract
+ *  transformer class and auxiliary class types.
+ *  If it's not, type declaration will be ignored by the framework.
+ *  If list is present and non-empty, corresponding plugins code will be generated as well.
+ *)
+let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list option) list) =
+  let module H = Plugin.Helper (struct let loc = loc end) in
+  let descrs = make_descrs mut_rec_type_decls in
   let get_gcata = function
-    | [name] when exists (fun (_, n) -> n = name) mut_rec_decls -> H.E.id (cata name)
+    | [name] when mem_assoc name descrs -> H.E.id (cata name)
     | qname ->
         let typename = H.E.acc (map H.E.id qname) in
         <:expr< $typename$.GT.gcata >>
   in
-  let is_mut_rec name  = try ignore (find (fun (_, n) -> name = n) mut_rec_decls); true with Not_found -> false in
+  let is_mut_rec type_name = mem_assoc type_name descrs in
   let reserved_names =
     fold_left
-      (fun acc ((_, n, d), _) ->
+      (fun acc (n, (_, d, _)) ->
          match d with
          | `PolymorphicVariant comps->
              fold_left
@@ -90,7 +213,7 @@ let generate tdecl_descr_list loc =
                comps
          | _ -> acc
       )
-      (map snd mut_rec_decls)
+      (map fst descrs)
       descrs
   in
   let g = name_generator reserved_names in
@@ -111,14 +234,10 @@ let generate tdecl_descr_list loc =
   let acc = g#generate "inh" in
   let generic_cata = <:patt< GT.gcata >> in
   let defs =
-    (* Everywhere
-     *     `parameter' stands for type parameter of some type (or class, or class type etc).
-     *     `type' - currently being processed type declaration or its name etc.
-     *)
-    map (fun ((type_parameters, type_name, descr), plugin_names) ->
+    map (fun (type_name, (type_parameters, description, plugin_names)) ->
       Plugin.load_plugins plugin_names;
       let is_polyvar =
-        match descr with
+        match description with
         | `PolymorphicVariant _ -> true
         | _ -> false
       in
@@ -216,7 +335,8 @@ let generate tdecl_descr_list loc =
            <:class_sig_item< method $lid:tmethod name$ : $msig$ >>)))
       in
       let add_derived_member, get_derived_classes =
-        let mut_rec = length mut_rec_decls > 1 in
+        let mut_rec = length descrs > 1 in
+        let obj_magic = <:expr< Obj.magic >> in
         let module M =
           struct
 
@@ -236,6 +356,7 @@ let generate tdecl_descr_list loc =
             module M = Plugin.StringMap
 
             let m = ref M.empty
+
             let get trait =
               try M.find trait !m
               with Not_found ->
@@ -246,7 +367,7 @@ let generate tdecl_descr_list loc =
                 let cn   = g#generate ("c_" ^ type_name) in
                 let vals, inits, methods, env_methods = split4 (
                   map
-                    (fun (args, t) ->
+                    (fun (t, (args, _, _)) ->
                       let ct      = if type_name = t then cn else g#generate ("c_" ^ t) in
                       let proto_t = trait_proto_t t trait in
                       let mt      = tmethod t             in
@@ -279,7 +400,7 @@ let generate tdecl_descr_list loc =
                       <:class_str_item< method $mt$ : $mtype$ = $H.E.method_call (H.E.id ct) mt$ >>,
                       <:class_sig_item< method $tmethod t$ : $mtype$ >>
                     )
-                    (filter (fun (_, n) -> n <> type_name) mut_rec_decls)
+                    (remove_assoc type_name descrs)
                  )
                 in
                 let items =
@@ -367,18 +488,18 @@ let generate tdecl_descr_list loc =
                   rev ((env_tt n trait) :: t),
                   n
                 in
-                let descr = {
+                let type_descriptor = {
                   is_polyvar = is_polyvar;
                   parameters = args;
                   name = name;
                   default_properties = prop;
                 }
                 in
-                let prop = fst (p loc descr) in
-                let i_def, _ = Plugin.generate_inherit false loc qname_proto (Some (H.E.id context.M.self, H.T.id "unit")) descr prop in
-                let i_impl, _ = Plugin.generate_inherit false loc qname None descr prop in
-                let i_def_proto, _ = Plugin.generate_inherit false loc qname_proto (Some (H.E.id context.M.env, H.T.id "unit")) descr prop in
-                let _ , i_env = Plugin.generate_inherit false loc env_tt None descr prop in
+                let prop = fst (p loc type_descriptor) in
+                let i_def, _ = Plugin.generate_inherit false loc qname_proto (Some (H.E.id context.M.self, H.T.id "unit")) type_descriptor prop in
+                let i_impl, _ = Plugin.generate_inherit false loc qname None type_descriptor prop in
+                let i_def_proto, _ = Plugin.generate_inherit false loc qname_proto (Some (H.E.id context.M.env, H.T.id "unit")) type_descriptor prop in
+                let _ , i_env = Plugin.generate_inherit false loc env_tt None type_descriptor prop in
                 {context with M.defaults = i_impl :: context.M.defaults;
                  M.items = i_def :: context.M.items;
                  M.proto_items = i_def_proto :: context.M.proto_items;
@@ -480,7 +601,7 @@ let generate tdecl_descr_list loc =
         combine plugin_names properties_and_generators
       in
       let match_cases = (
-        match descr with
+        match description with
         | (`Variant constructors | `PolymorphicVariant constructors) -> constructors
         | (`Tuple _ | `Record _) as tuple_or_record -> [tuple_or_record]
         )
@@ -602,9 +723,9 @@ let generate tdecl_descr_list loc =
   let open_type td =
     match td.tdDef with
     | <:ctyp< [ = $list:lcons$ ] >> ->
-        let get_val x = get_val loc x in
-        let name      = type_open_t (get_val (snd (get_val td.tdNam))) in
-        let args      = map (function (VaVal (Some name), _) -> name | _ -> oops loc "unsupported case (internal error)") (get_val td.tdPrm) in
+        let from_vaval x = from_vaval loc x in
+        let name      = type_open_t (from_vaval (snd (from_vaval td.tdNam))) in
+        let args      = map (function (VaVal (Some name), _) -> name | _ -> oops loc "unsupported case (internal error)") (from_vaval td.tdPrm) in
         let gen       = name_generator args in
         let self      = gen#generate "self" in
         [{td with tdNam = VaVal (loc, VaVal name);
@@ -623,8 +744,9 @@ let generate tdecl_descr_list loc =
     class_defs @ (flatten protos) @ (flatten defs), flatten class_decls
   in
   let cata_def = <:str_item< value $list: [H.P.tuple pnames, H.E.letrec defs (H.E.tuple tnames)]$ >> in
-  let open_t = flatten (map open_type tdecls) in
-  let type_def = <:str_item< type $list: tdecls @ open_t$ >> in
-  let type_decl = <:sig_item< type $list: tdecls @ open_t$ >> in
+  let type_decls = map snd3 mut_rec_type_decls in
+  let open_t = flatten (map open_type type_decls) in
+  let type_def = <:str_item< type $list: type_decls @ open_t$ >> in
+  let type_decl = <:sig_item< type $list: type_decls @ open_t$ >> in
   <:str_item< declare $list: type_def :: class_defs @ [cata_def] @ derived_class_defs$ end >>,
   <:sig_item< declare $list: type_decl :: class_decls @ decls @ derived_class_decls$ end >>

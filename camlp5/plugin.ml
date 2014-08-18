@@ -49,9 +49,9 @@ exception Generic_extension of string
 
 let oops loc str = Ploc.raise loc (Generic_extension str)
 
-let get_val loc = function
-| VaVal x -> x
-| _       -> oops loc "could not get VaVal _ (should not happen)"
+let from_vaval loc = function
+| VaVal v -> v
+| _ -> oops loc "could not get VaVal _ (should not happen)"
 
 let hdtl loc = function
 | h::t -> (h, t)
