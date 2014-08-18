@@ -1,7 +1,7 @@
 (**************************************************************************
  *  Copyright (C) 2012-2013
  *  Dmitri Boulytchev (dboulytchev@math.spbu.ru), St.Petersburg State University
- *  Universitetskii pr., 28, St.Petersburg, 198504, RUSSIA    
+ *  Universitetskii pr., 28, St.Petersburg, 198504, RUSSIA
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Lesser General Public
@@ -28,42 +28,38 @@ open Pcaml
 open MLast
 open Ploc
 open Dynlink
-open List 
+open List
 open Printf
 
-type typ  = 
-  Arbitrary of ctyp  
+type typ  =
+| Arbitrary of ctyp
 | Variable  of ctyp * string
 | Self      of ctyp * string list * string list
 | Tuple     of ctyp * typ list
 | Instance  of ctyp * typ list * string list
 
-let ctyp_of = function 
-| Arbitrary t 
-| Variable (t, _) 
-| Self     (t, _, _) 
-| Instance (t, _, _) 
-| Tuple    (t, _) -> t 
+let ctyp_of = function
+| Arbitrary t
+| Variable (t, _)
+| Self     (t, _, _)
+| Instance (t, _, _)
+| Tuple    (t, _) -> t
 
 exception Generic_extension of string
 
 let oops loc str = Ploc.raise loc (Generic_extension str)
 
-let get_val loc = function 
-| VaVal x -> x 
+let get_val loc = function
+| VaVal x -> x
 | _       -> oops loc "could not get VaVal _ (should not happen)"
 
 let hdtl loc = function
 | h::t -> (h, t)
 | _    -> oops loc "empty list (should not happen)"
 
-let map_last loc f l = 
+let map_last loc f l =
   let h, tl = hdtl loc (rev l) in
   rev (f h :: tl)
-
-let option loc = function
-| Some p -> p
-| _      -> oops loc "empty option (should not happen)"
 
 exception Bad_plugin of string
 
@@ -73,7 +69,7 @@ let rec name_generator list =
   object(self)
     method copy = name_generator (S.elements !s)
     method generate prompt =
-      if S.mem prompt !s 
+      if S.mem prompt !s
       then self#generate (prompt ^ "_")
       else (
         s := S.add prompt !s;
@@ -120,7 +116,7 @@ type type_descriptor = {
   is_polyvar : bool;
   parameters : parameter list;
   name : type_name;
-  default : properties;
+  default_properties : properties;
 }
 
 type env = {
@@ -147,7 +143,7 @@ module Helper (L : sig val loc : loc end) =
     open L
 
     let id lid uid s =
-      if String.length s = 0 
+      if String.length s = 0
       then invalid_arg "Plugin.Helper.id: empty string"
       else (if s.[0] = Char.uppercase s.[0] then uid else lid) s
 
@@ -162,7 +158,7 @@ module Helper (L : sig val loc : loc end) =
         let uid         = (fun s -> <:ctyp< $uid:s$ >>)
         let id          = id lid uid
         let acc         = qname (fun x y -> <:ctyp< $x$ . $y$ >>) (fun x -> x)
-        let qname       = qname (fun x y -> <:ctyp< $x$ . $y$ >>) id 
+        let qname       = qname (fun x y -> <:ctyp< $x$ . $y$ >>) id
         let alias t1 t2 = <:ctyp< $t1$ as $t2$ >>
         let wildcard    = <:ctyp< _ >>
 
@@ -206,7 +202,7 @@ module Helper (L : sig val loc : loc end) =
         let uid         = (fun s -> <:patt< $uid:s$ >>)
         let id          = id lid uid
         let acc         = qname (fun x y -> <:patt< $x$ . $y$ >>) (fun x -> x)
-        let qname       = qname (fun x y -> <:patt< $x$ . $y$ >>) id 
+        let qname       = qname (fun x y -> <:patt< $x$ . $y$ >>) id
         let alias t1 t2 = <:patt< ($t1$ as $t2$ ) >>
         let wildcard    = <:patt< _ >>
 
@@ -244,14 +240,14 @@ module Helper (L : sig val loc : loc end) =
         let uid   = (fun s -> <:expr< $uid:s$ >>)
         let id    = id lid uid
         let acc   = qname (fun x y -> <:expr< $x$ . $y$ >>) (fun x -> x)
-        let qname = qname (fun x y -> <:expr< $x$ . $y$ >>) id 
+        let qname = qname (fun x y -> <:expr< $x$ . $y$ >>) id
 
         let app   = function
         | []    -> invalid_arg "Plugin.Helper.E.app: empty expression list"
         | h::tl -> fold_left (fun a e -> <:expr< $a$ $e$ >>) h tl
 
         let abstr       list       = <:expr< fun [ $list:list$ ] >>
-        let func        args body  = fold_right 
+        let func        args body  = fold_right
                                        (fun arg expr -> <:expr< fun [ $list:[arg, VaVal None, expr]$ ] >>)
                                        args
                                        body
@@ -296,7 +292,7 @@ module Helper (L : sig val loc : loc end) =
         let unit                   = <:expr< () >>
 
         let gt_field f e = acc [e; uid "GT"; lid f]
-        let gt_f         = gt_field "f" 
+        let gt_f         = gt_field "f"
         let gt_x         = gt_field "x"
         let gt_fx        = gt_field "fx"
         let gt_tp e p    = method_call (gt_field "t" e) p
@@ -305,7 +301,7 @@ module Helper (L : sig val loc : loc end) =
   end
 
 let generate_classes loc trait descr (prop, generator) (this, env, env_t, b_proto_def, b_def, b_proto_decl, b_decl) =
-  let class_targs = prop.transformer_parameters in 
+  let class_targs = prop.transformer_parameters in
   let def n b = {
     ciLoc = loc;
     ciVir = Ploc.VaVal false;
@@ -320,31 +316,31 @@ let generate_classes loc trait descr (prop, generator) (this, env, env_t, b_prot
   in
   generator#header @ [<:str_item< class type $list:[def (env_tt descr.name trait) env_t]$ >>],
   <:str_item< class $list:[def (trait_proto_t descr.name trait) ce]$ >>,
-  <:str_item< class $list:[def (trait_t descr.name trait) b_def]$ >>, 
+  <:str_item< class $list:[def (trait_t descr.name trait) b_def]$ >>,
   generator#header_sig @ [<:sig_item< class type $list:[def (env_tt descr.name trait) env_t]$ >>],
   <:sig_item< class $list:[def (trait_proto_t descr.name trait) b_proto_decl]$ >>,
   <:sig_item< class $list:[def (trait_t descr.name trait) b_decl]$ >>
 
 let generate_inherit base_class loc qname arg descr prop =
   let args =
-    if base_class 
+    if base_class
     then
       flatten (map (fun a -> [<:ctyp< ' $a$ >>; prop.inh_t_of_parameter a; prop.syn_t_of_parameter a]) descr.parameters) @
-      [prop.inh_t; prop.syn_t] 
+      [prop.inh_t; prop.syn_t]
     else map (fun a -> <:ctyp< ' $a$ >>) prop.transformer_parameters
   in
-  let ce = 
+  let ce =
     let ce = match args with [] -> <:class_expr< $list:qname$ >> | _ -> <:class_expr< [ $list:args$ ] $list:qname$ >> in
-    match arg with 
+    match arg with
     | None -> ce
     | Some (e, _) -> <:class_expr< $ce$ $e$ >>
   in
   let ct =
     let h, t = hdtl loc qname in
-    let ct   = 
-      fold_left 
-        (fun t id -> let id = <:class_type< $id:id$ >> in <:class_type< $t$ . $id$ >>) 
-        <:class_type< $id:h$ >>  
+    let ct   =
+      fold_left
+        (fun t id -> let id = <:class_type< $id:id$ >> in <:class_type< $t$ . $id$ >>)
+        <:class_type< $id:h$ >>
       t
     in
     let ct = match args with [] -> ct | _ -> <:class_type< $ct$ [ $list:args$ ] >> in

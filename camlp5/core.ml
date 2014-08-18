@@ -47,12 +47,18 @@ let split6 l =
   List.fold_right
     (fun (a, b, c, d, e, f) (x, y, z, t, h, i) -> a::x, b::y, c::z, d::t, e::h, f::i) l ([], [], [], [], [], [])
 
+let apply_to2 arg1 arg2 func = func arg1 arg2
+
 let ctyp_of_qname loc qname =
   let module H = Plugin.Helper (struct let loc = loc end) in H.T.acc (map H.T.id qname)
 
 let ctyp_of_instance loc args qname =
   let module H = Plugin.Helper (struct let loc = loc end) in
   H.T.app (qname :: args)
+
+let from_option_with_error loc = function
+| Some p -> p
+| _      -> oops loc "empty option (should not happen)"
 
 let generate tdecl_descr_list loc =
   let module H = Plugin.Helper (struct let loc = loc end) in
@@ -73,7 +79,7 @@ let generate tdecl_descr_list loc =
     fold_left
       (fun acc ((_, n, d), _) ->
          match d with
-         | `Poly comps->
+         | `PolymorphicVariant comps->
              fold_left
                (fun acc t ->
                   match t with
@@ -113,7 +119,7 @@ let generate tdecl_descr_list loc =
       Plugin.load_plugins plugin_names;
       let is_polyvar =
         match descr with
-        | `Poly _ -> true
+        | `PolymorphicVariant _ -> true
         | _ -> false
       in
       let generator = name_generator type_parameters in
@@ -137,7 +143,7 @@ let generate tdecl_descr_list loc =
         is_polyvar = is_polyvar;
         parameters = type_parameters;
         name = type_name;
-        default = {
+        default_properties = {
           inh_t = H.T.var inh;
           syn_t = H.T.var syn;
           transformer_parameters = transformer_parameters;
@@ -146,13 +152,14 @@ let generate tdecl_descr_list loc =
         };
       }
       in
-      let derived  = map (fun name -> name, (option loc (Plugin.get name)) loc type_descriptor) plugin_names in
       let tpo_name = generator#generate "tpo" in
       let self_name = generator#generate "self" in
-      let tpo      =
-        H.E.obj None (map (fun a -> <:class_str_item< method $lid:a$ = $H.E.id (farg a)$ >>) type_parameters)
+      let tpo =
+        H.E.obj None (map (fun param ->
+          <:class_str_item< method $lid: param$ = $H.E.id (farg param)$ >>) type_parameters)
       in
-      let tpf = map (fun a -> H.T.arrow (map H.T.var [inh_parameter_of a; a; syn_parameter_of a])) type_parameters in
+      let tpf = map (fun param ->
+        H.T.arrow (map H.T.var [inh_parameter_of param; param; syn_parameter_of param])) type_parameters in
       let tpt = H.T.obj (combine type_parameters tpf) false in
       let catype =
         let typ = H.T.app (H.T.id type_name :: map H.T.var type_parameters) in
@@ -251,7 +258,7 @@ let generate tdecl_descr_list loc =
                         is_polyvar = false;
                         parameters = args;
                         name = t;
-                        default = {
+                        default_properties = {
                           inh_t = H.T.var inh;
                           syn_t = H.T.var syn;
                           transformer_parameters = args;
@@ -260,7 +267,7 @@ let generate tdecl_descr_list loc =
                         };
                       }
                       in
-                      let prop, _ = (option loc (Plugin.get trait)) loc type_descriptor in
+                      let prop, _ = (from_option_with_error loc (Plugin.get trait)) loc type_descriptor in
                       let typ     = H.T.app (H.T.id t :: map H.T.var args) in
                       let inh_t   = prop.Plugin.inh_t in
                       let targs = map (fun a ->
@@ -276,7 +283,7 @@ let generate tdecl_descr_list loc =
                  )
                 in
                 let items =
-                  let prop, _ = (option loc (Plugin.get trait)) loc type_descriptor in
+                  let prop, _ = (from_option_with_error loc (Plugin.get trait)) loc type_descriptor in
                   let this    = H.E.coerce (H.E.id this) (H.T.app (H.T.id (trait_t type_name trait)::map H.T.var prop.Plugin.transformer_parameters)) in
                   vals @ [<:class_str_item< initializer $H.E.seq (H.E.app [H.E.lid ":="; H.E.id self; this]::inits)$ >>] @ methods
                 in
@@ -297,7 +304,7 @@ let generate tdecl_descr_list loc =
           end
         in
         (fun case (trait, (prop, generator)) ->
-          let p       = option loc (Plugin.get trait) in
+          let p       = from_option_with_error loc (Plugin.get trait) in
           let context = M.get trait                   in
           let g       = context.M.gen#copy            in
           let branch met_name met_args gen =
@@ -314,7 +321,8 @@ let generate tdecl_descr_list loc =
                      | Instance (_, args, qname) ->
                          let args = map inner args in
                          (match qname with
-                          | [t] when is_mut_rec t && t <> type_name -> H.E.app ((H.E.method_call (H.E.app [H.E.lid "!"; H.E.id context.M.env]) (tmethod t)) :: args)
+                          | [t] when is_mut_rec t && t <> type_name ->
+                              H.E.app ((H.E.method_call (H.E.app [H.E.lid "!"; H.E.id context.M.env]) (tmethod t)) :: args)
                           | _  ->
                               let tobj =
                                 match qname with
@@ -338,7 +346,7 @@ let generate tdecl_descr_list loc =
           in
           let context =
             match case with
-            | `Struct fields ->
+            | `Record fields ->
                 let fields = map (fun (n, m, t) -> g#generate n, (n,  m, t)) fields in
                 branch vmethod (map fst fields) (fun env -> generator#record env fields)
 
@@ -346,7 +354,7 @@ let generate tdecl_descr_list loc =
                 let elems = mapi (fun i t -> g#generate (sprintf "p%d" i), t) elems in
                 branch vmethod (map fst elems) (fun env -> generator#tuple env elems)
 
-            | `Con (cname, cargs) ->
+            | `Constructor (cname, cargs) ->
                 let args = mapi (fun i a -> g#generate (sprintf "p%d" i), a) cargs in
                 branch (cmethod cname) (map fst args) (fun env -> generator#constructor env cname args)
 
@@ -363,7 +371,7 @@ let generate tdecl_descr_list loc =
                   is_polyvar = is_polyvar;
                   parameters = args;
                   name = name;
-                  default = prop;
+                  default_properties = prop;
                 }
                 in
                 let prop = fst (p loc descr) in
@@ -384,7 +392,9 @@ let generate tdecl_descr_list loc =
            let context = M.get trait in
            let i_def, _ = Plugin.generate_inherit true  loc [class_t  type_name] None type_descriptor (fst p) in
            let _ , i_decl = Plugin.generate_inherit true  loc [class_tt type_name] None type_descriptor (fst p) in
-           let p_def, _ = Plugin.generate_inherit false loc [trait_proto_t type_name trait] (Some (H.E.id context.M.self, H.T.id "unit")) type_descriptor (fst p) in
+           let p_def, _ =
+             Plugin.generate_inherit false loc [trait_proto_t type_name trait] (Some (H.E.id context.M.self, H.T.id "unit")) type_descriptor (fst p)
+           in
            let cproto = <:class_expr< object ($H.P.id context.M.this$) $list:i_def::context.M.proto_items$ end >> in
            let ce =
              let ce = <:class_expr< object ($H.P.id context.M.this$) $list:i_def::p_def::context.M.defaults@context.M.items$ end >> in
@@ -392,7 +402,9 @@ let generate tdecl_descr_list loc =
            in
            let env_t = <:class_type< object $list:context.M.env_sig$ end >> in
            let class_targs = map H.T.var (fst p).transformer_parameters in
-           let cproto_t = <:class_type< [ $H.T.app [H.T.id "ref"; H.T.app (H.T.id (env_tt type_name trait) :: class_targs)]$ ] -> object $list:[i_decl]$ end >> in
+           let cproto_t =
+             <:class_type< [ $H.T.app [H.T.id "ref"; H.T.app (H.T.id (env_tt type_name trait) :: class_targs)]$ ] -> object $list:[i_decl]$ end >>
+           in
            let ct =
              let ct =
                match class_targs with
@@ -405,116 +417,125 @@ let generate tdecl_descr_list loc =
            Plugin.generate_classes loc trait type_descriptor p (context.M.this, context.M.env, env_t, cproto, ce, cproto_t, ct)
         )
       in
-      let match_cases =
-        let case_branch patt met_name names types =
-          let met_sig  =
-            let make_a x y z = H.T.app [<:ctyp< GT.a >>; x; y; z; tpt] in
-            let rec make_typ = function
-            | Arbitrary t | Instance (t, _, _) -> t
-            | Variable (t, name) -> make_a (H.T.var (inh_parameter_of name)) t (H.T.var (syn_parameter_of name))
-            | Self     (t, _, _) -> make_a (H.T.var inh) t (H.T.var syn)
-            | Tuple    (t, typs) -> H.T.tuple (map make_typ typs)
-            in
-            let typs = [H.T.var inh;
-                        make_a (H.T.var inh) (H.T.app (H.T.id type_name :: map H.T.var type_parameters)) (H.T.var syn)
-                       ] @
-                       (map make_typ types)
-            in
-            H.T.arrow (typs @ [H.T.var syn])
+      let case_branch patt met_name names types =
+        let met_sig  =
+          let make_a x y z = H.T.app [<:ctyp< GT.a >>; x; y; z; tpt] in
+          let rec make_typ = function
+          | Arbitrary t | Instance (t, _, _) -> t
+          | Variable (t, name) -> make_a (H.T.var (inh_parameter_of name)) t (H.T.var (syn_parameter_of name))
+          | Self     (t, _, _) -> make_a (H.T.var inh) t (H.T.var syn)
+          | Tuple    (t, typs) -> H.T.tuple (map make_typ typs)
           in
-          let expr =
-            let met = H.E.method_call (H.E.id trans) met_name in
-            let garg f x =
-              H.E.app [<:expr< GT.make >>; f; x; H.E.id tpo_name]
-            in
-            H.E.app (
-              [met; H.E.id acc; garg (H.E.id self_name) (H.E.id subj)] @
-              (map (fun (typ, x) ->
-                      let rec augmented = function
-                      | Arbitrary _ | Instance _ -> false
-                      | Self      _ | Variable _ -> true
-                      | Tuple (_, typs) -> exists augmented typs
-                      in
-                      let rec augment id = function
-                      | Arbitrary _ | Instance _ ->  H.E.id id
-                      | Variable (_, name)       -> garg (H.E.id (farg name)) (H.E.id id)
-                      | Self     (typ, args, t)  ->
-                          let name = get_type_handler (typ, args, t) in
-                          garg name (H.E.id id)
-                      | Tuple    (_, typs) as typ ->
-                          if augmented typ
-                          then
-                            let generator  = generator#copy in
-                            let components = mapi (fun i _ -> generator#generate (sprintf "e%d" i)) typs in
-                            H.E.let_nrec
-                              [H.P.tuple (map H.P.id components), H.E.id id]
-                              (H.E.tuple (map (fun (name, typ) -> augment name typ) (combine components typs)))
-                          else H.E.id id
-                      in
-                      augment x typ
-                   )
-                   (combine types names)
-              )
-            )
+          let typs = [H.T.var inh;
+                      make_a (H.T.var inh) (H.T.app (H.T.id type_name :: map H.T.var type_parameters)) (H.T.var syn)
+                     ] @
+                     (map make_typ types)
           in
-          (patt, VaVal None, expr),
-          [<:class_str_item< method virtual $lid:met_name$ : $met_sig$ >>],
-          [<:class_sig_item< method virtual $lid:met_name$ : $met_sig$ >>],
-          [<:class_sig_item< method $lid:met_name$ : $met_sig$ >>],
-          []
+          H.T.arrow (typs @ [H.T.var syn])
         in
-        map
-          (function
-           | `Tuple elems as case ->
-               iter (add_derived_member case) derived;
-               let args = mapi (fun i a -> sprintf "p%d" i) elems in
-               let patt = H.P.tuple (map H.P.id args) in
-               case_branch patt vmethod args elems
-
-           | `Struct fields as case ->
-               iter (add_derived_member case) derived;
-               let names, _, types = split3 fields in
-               let args = map (fun a -> generator#generate a) names in
-               let patt = H.P.record (map (fun (n, a) -> H.P.id n, H.P.id a) (combine names args)) in
-               case_branch patt vmethod args types
-
-           | `Con (cname, cargs) as case ->
-               iter (add_derived_member case) derived;
-               let args = mapi (fun i a -> sprintf "p%d" i) cargs in
-               let patt = H.P.app ((if is_polyvar then H.P.variant else H.P.id) cname :: map H.P.id args) in
-               case_branch patt (cmethod cname) args cargs
-
-           | `Type (Instance (_, args, qname)) as case ->
-               let args = map (function Variable (_, a) -> a | _ -> oops loc "unsupported case (non-variable in instance)") args in (* TODO *)
-               iter (add_derived_member case) derived;
-               let targs = flatten (map (fun a -> [a; inh_parameter_of a; syn_parameter_of a]) args) @ [inh; syn] in
-               let targs = map H.T.var targs in
-               let ce    = <:class_expr< [ $list:targs$ ] $list:map_last loc class_t qname$ >> in
-               let ct f  =
-                 let h, t = hdtl loc (map_last loc f qname) in
-                 let ct   =
-                   fold_left
-                     (fun t id -> let id = <:class_type< $id:id$ >> in <:class_type< $t$ . $id$ >>)
-                     <:class_type< $id:h$ >>
-                   t
-                 in
-                 <:class_type< $ct$ [ $list:targs$ ] >>
-               in
-               let expr =
-                 H.E.app (
-                   (get_gcata qname) ::
-                   (map (fun a -> H.E.id (farg a)) args @ [H.E.id trans; H.E.id acc; H.E.id subj])
-                )
-               in
-               (H.P.alias (H.P.type_p qname) (H.P.id subj), VaVal None, expr),
-               [<:class_str_item< inherit $ce$ >>],
-               [<:class_sig_item< inherit $ct class_t$  >>],
-               [<:class_sig_item< inherit $ct class_tt$ >>],
-               [args, qname]
-
-           | _ -> oops loc "unsupported case (internal error)"
+        let expr =
+          let met = H.E.method_call (H.E.id trans) met_name in
+          let garg f x =
+            H.E.app [<:expr< GT.make >>; f; x; H.E.id tpo_name]
+          in
+          H.E.app (
+            [met; H.E.id acc; garg (H.E.id self_name) (H.E.id subj)] @
+            (map (fun (typ, x) ->
+                    let rec augmented = function
+                    | Arbitrary _ | Instance _ -> false
+                    | Self      _ | Variable _ -> true
+                    | Tuple (_, typs) -> exists augmented typs
+                    in
+                    let rec augment id = function
+                    | Arbitrary _ | Instance _ ->  H.E.id id
+                    | Variable (_, name)       -> garg (H.E.id (farg name)) (H.E.id id)
+                    | Self     (typ, args, t)  ->
+                        let name = get_type_handler (typ, args, t) in
+                        garg name (H.E.id id)
+                    | Tuple    (_, typs) as typ ->
+                        if augmented typ
+                        then
+                          let generator  = generator#copy in
+                          let components = mapi (fun i _ -> generator#generate (sprintf "e%d" i)) typs in
+                          H.E.let_nrec
+                            [H.P.tuple (map H.P.id components), H.E.id id]
+                            (H.E.tuple (map (fun (name, typ) -> augment name typ) (combine components typs)))
+                        else H.E.id id
+                    in
+                    augment x typ
+                 )
+                 (combine types names)
+            )
           )
-          (match descr with `Vari cons | `Poly cons -> cons | (`Tuple _ | `Struct _) as x -> [x])
+        in
+        (patt, VaVal None, expr),
+        [<:class_str_item< method virtual $lid:met_name$ : $met_sig$ >>],
+        [<:class_sig_item< method virtual $lid:met_name$ : $met_sig$ >>],
+        [<:class_sig_item< method $lid:met_name$ : $met_sig$ >>],
+        []
+      in
+      let derived : (plugin_name * (properties * generator)) list =
+        let plugin_processors = plugin_names |> map Plugin.get |> map (from_option_with_error loc) in
+        let properties_and_generators = plugin_processors |> map (apply_to2 loc type_descriptor) in
+        combine plugin_names properties_and_generators
+      in
+      let match_cases = (
+        match descr with
+        | (`Variant constructors | `PolymorphicVariant constructors) -> constructors
+        | (`Tuple _ | `Record _) as tuple_or_record -> [tuple_or_record]
+        )
+        |>
+        map (
+          function
+          | `Tuple elements as case ->
+              iter (add_derived_member case) derived;
+              let args = mapi (fun i a -> sprintf "p%d" i) elements in
+              let patt = H.P.tuple (map H.P.id args) in
+              case_branch patt vmethod args elements
+
+          | `Record fields as case ->
+              iter (add_derived_member case) derived;
+              let names, _, types = split3 fields in
+              let args = map (fun a -> generator#generate a) names in
+              let patt = H.P.record (map (fun (n, a) -> H.P.id n, H.P.id a) (combine names args)) in
+              case_branch patt vmethod args types
+
+          | `Constructor (cname, cargs) as case ->
+              iter (add_derived_member case) derived;
+              let args = mapi (fun i a -> sprintf "p%d" i) cargs in
+              let patt = H.P.app ((if is_polyvar then H.P.variant else H.P.id) cname :: map H.P.id args) in
+              case_branch patt (cmethod cname) args cargs
+
+          | `Type (Instance (_, args, qname)) as case ->
+              let args = map (function Variable (_, a) -> a | _ -> oops loc "unsupported case (non-variable in instance)") args in (* TODO *)
+              iter (add_derived_member case) derived;
+              let targs = flatten (map (fun a -> [a; inh_parameter_of a; syn_parameter_of a]) args) @ [inh; syn] in
+              let targs = map H.T.var targs in
+              let ce    = <:class_expr< [ $list:targs$ ] $list:map_last loc class_t qname$ >> in
+              let ct f  =
+                let h, t = hdtl loc (map_last loc f qname) in
+                let ct   =
+                  fold_left
+                    (fun t id -> let id = <:class_type< $id:id$ >> in <:class_type< $t$ . $id$ >>)
+                    <:class_type< $id:h$ >>
+                  t
+                in
+                <:class_type< $ct$ [ $list:targs$ ] >>
+              in
+              let expr =
+                H.E.app (
+                  (get_gcata qname) ::
+                  (map (fun a -> H.E.id (farg a)) args @ [H.E.id trans; H.E.id acc; H.E.id subj])
+               )
+              in
+              (H.P.alias (H.P.type_p qname) (H.P.id subj), VaVal None, expr),
+              [<:class_str_item< inherit $ce$ >>],
+              [<:class_sig_item< inherit $ct class_t$  >>],
+              [<:class_sig_item< inherit $ct class_tt$ >>],
+              [args, qname]
+
+          | _ -> oops loc "unsupported case (internal error)"
+        )
       in
       let subj = H.E.id subj in
       let local_defs_and_then expr =
