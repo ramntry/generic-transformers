@@ -189,13 +189,13 @@ let make_descrs mut_rec_type_decls =
 let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list option) list) =
   let module H = Plugin.Helper (struct let loc = loc end) in
   let descrs = make_descrs mut_rec_type_decls in
-  let get_gcata = function
-    | [name] when mem_assoc name descrs -> H.E.id (cata name)
-    | qname ->
-        let typename = H.E.acc (map H.E.id qname) in
-        <:expr< $typename$.GT.gcata >>
-  in
   let is_mut_rec type_name = mem_assoc type_name descrs in
+  let get_gcata = function
+    | [type_name] when is_mut_rec type_name -> H.E.id (cata type_name)
+    | qualified_name ->
+        let gt_record = H.E.acc (map H.E.id qualified_name) in
+        <:expr< $gt_record$.GT.gcata >>
+  in
   let reserved_names =
     fold_left
       (fun acc (n, (_, d, _)) ->
