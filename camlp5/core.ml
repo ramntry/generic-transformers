@@ -171,15 +171,13 @@ let type_decl_to_description loc td =
   (type_name, type_parameters, convert td.tdDef)
 
 let make_descrs mut_rec_type_decls =
-  mut_rec_type_decls
-  |> map (fun (loc, type_decl, request) ->
+  fold_right (fun (loc, type_decl, request) acc ->
     match request with
     | Some plugin_names ->
         let (type_name, type_parameters, description) = type_decl_to_description loc type_decl in
-        [(type_name, (type_parameters, description, plugin_names))]
-    | None -> []
-    )
-  |> flatten
+        (type_name, (type_parameters, description, plugin_names)) :: acc
+    | None -> acc
+  ) mut_rec_type_decls []
 
 (** mut_rec_type_decls argument is a group of mutual recursive type declarations, in which each element is original
  *  OCaml type declaration and an optional list of plugin names.
