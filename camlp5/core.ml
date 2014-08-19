@@ -73,7 +73,7 @@ let name_of_type_decl loc type_decl =
 
 let parameters_of_type_decl loc type_decl =
   from_vaval loc type_decl.tdPrm
-  |> map (fun (type_variable, _covariant_flags) ->
+  |> map (fun (type_variable, _variance_flags) ->
       match from_vaval loc type_variable with
       | Some type_parameter -> type_parameter
       | None -> oops loc "wildcard type parameters not supported"
@@ -119,48 +119,48 @@ let type_decl_to_description loc td =
       replace (inner typ)
     in
     function
-    | <:ctyp< [ $list:const$ ] >> | <:ctyp< $_$ == $priv:_$ [ $list:const$ ] >> ->
-        let const = map (fun (loc, name, args, d) ->
-                           match d with
-                           | None -> `Constructor (from_vaval loc name, map convert_concrete (from_vaval loc args))
-                           | _    -> oops loc "unsupported constructor declaration"
-                        )
-                    const
-        in
-        `Variant const
+    | <:ctyp< [ $list: constructors$ ] >> | <:ctyp< $_$ == $priv: _$ [ $list: constructors$ ] >> ->
+        `Variant (
+          constructors
+          |> map (fun (loc, cname, cargs, d) ->
+              match d with
+              | None -> `Constructor (from_vaval loc cname, map convert_concrete (from_vaval loc cargs))
+              | _    -> oops loc "unsupported constructor declaration"
+              )
+        )
 
-    | <:ctyp< { $list:fields$ } >> | <:ctyp< $_$ == $priv:_$ { $list:fields$ } >> ->
-        let fields = map (fun (_, name, mut, typ) -> name, mut, convert_concrete typ) fields in
+    | <:ctyp< { $list: fields$ } >> | <:ctyp< $_$ == $priv:_$ { $list: fields$ } >> ->
+        let fields = map (fun (_, name, mut, typ) -> (name, mut, convert_concrete typ)) fields in
         `Record fields
 
-    | <:ctyp< ( $list:typs$ ) >> -> `Tuple (map convert_concrete typs)
+    | <:ctyp< ( $list: typs$ ) >> ->
+        `Tuple (map convert_concrete typs)
 
-    | <:ctyp< [ = $list:variants$ ] >> ->
-        let wow ()   = oops loc "unsupported polymorphic variant type constructor declaration" in
-        let variants =
-          map (function
-               | <:poly_variant< $typ$ >> ->
-                  (match convert_concrete typ with
-                   | Arbitrary _ -> wow ()
-                   | typ -> `Type typ
+    | <:ctyp< [ = $list: variants$ ] >> ->
+        let unsupported () = oops loc "unsupported polymorphic variant type constructor declaration" in
+        `PolymorphicVariant (
+          variants
+          |> map (function
+              | <:poly_variant< $typ$ >> -> (
+                  match convert_concrete typ with
+                  | Arbitrary _ -> unsupported ()
+                  | typ -> `Type typ
                   )
-               | <:poly_variant< ` $c$ >> -> `Constructor (c, [])
-               | <:poly_variant< ` $c$ of $list:typs$ >> ->
-                   let typs =
-                     flatten (
-                       map (function
-                            | <:ctyp< ( $list:typs$ ) >> -> map convert_concrete typs
-                            | typ -> [convert_concrete typ]
-                           )
-                           typs
-                     )
-                   in
-                   `Constructor (c, typs)
-               | _ -> wow ()
+              | <:poly_variant< ` $c$ >> -> `Constructor (c, [])
+              | <:poly_variant< ` $c$ of $list: typs$ >> ->
+                  let typs =
+                    flatten (
+                      map (function
+                           | <:ctyp< ( $list: typs$ ) >> -> map convert_concrete typs
+                           | typ -> [convert_concrete typ]
+                          )
+                          typs
+                    )
+                  in
+                  `Constructor (c, typs)
+              | _ -> unsupported ()
               )
-            variants
-        in
-        `PolymorphicVariant variants
+        )
 
     | typ -> (
         match convert_concrete typ with
