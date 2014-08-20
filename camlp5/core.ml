@@ -149,16 +149,6 @@ let type_decl_to_description loc type_decl =
     |> find_selfs type_name type_parameters
   in
   let convert_definition type_definition =
-    let tag_of obj = Obj.tag (Obj.repr obj) in
-    let field_of obj field_index = Obj.field (Obj.repr obj) field_index in
-    let tag = tag_of type_definition in
-    Printf.fprintf stderr "===> tdDef has tag %d" tag;
-    if tag = 3 then begin
-      let ctyp1 = field_of type_definition 1 in
-      let ctyp2 = field_of type_definition 2 in
-      Printf.fprintf stderr " (TyApp) with args loc, %d, %d" (tag_of ctyp1) (tag_of ctyp2)
-    end;
-    Printf.fprintf stderr "\n";
     match type_definition with
     | <:ctyp< [ $list: constructors$ ] >> | <:ctyp< $_$ == $priv: _$ [ $list: constructors$ ] >> ->
         `Variant (
@@ -204,7 +194,6 @@ let type_decl_to_description loc type_decl =
             )
 
         | typ -> (
-            Printf.fprintf stderr "   >   passed into 'typ' branch of matching\n";
             match ctyp_to_typ typ with
             | Arbitrary _ -> oops loc "unsupported type"
             | typ ->
