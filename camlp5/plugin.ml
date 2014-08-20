@@ -32,30 +32,30 @@ open List
 open Printf
 
 type typ  =
-| Arbitrary of ctyp
-| Variable  of ctyp * string
-| Self      of ctyp * string list * string list
-| Tuple     of ctyp * typ list
-| Instance  of ctyp * typ list * string list
+  | Arbitrary of ctyp
+  | Variable  of ctyp * string
+  | Self      of ctyp * string list * string list
+  | Tuple     of ctyp * typ list
+  | Instance  of ctyp * typ list * string list
 
 let ctyp_of = function
-| Arbitrary t
-| Variable (t, _)
-| Self     (t, _, _)
-| Instance (t, _, _)
-| Tuple    (t, _) -> t
+  | Arbitrary t
+  | Variable (t, _)
+  | Self     (t, _, _)
+  | Instance (t, _, _)
+  | Tuple    (t, _) -> t
 
 exception Generic_extension of string
 
 let oops loc str = Ploc.raise loc (Generic_extension str)
 
 let from_vaval loc = function
-| VaVal v -> v
-| _ -> oops loc "could not get VaVal _ (should not happen)"
+  | VaVal v -> v
+  | _ -> oops loc "could not get VaVal _ (should not happen)"
 
 let hdtl loc = function
-| h::t -> (h, t)
-| _    -> oops loc "empty list (should not happen)"
+  | h::t -> (h, t)
+  | _    -> oops loc "empty list (should not happen)"
 
 let map_last loc f l =
   let h, tl = hdtl loc (rev l) in

@@ -59,8 +59,9 @@ let ctyp_of_instance loc args qname =
   H.T.app (qname :: args)
 
 let from_option_with_error loc = function
-| Some v -> v
-| _ -> oops loc "empty option (should not happen)"
+  | Some v -> v
+  | _ -> oops loc "empty option (should not happen)"
+
 
 (* Everywhere
  *     'parameter' stands for type parameter of some type (or class, or class type etc).
@@ -68,10 +69,10 @@ let from_option_with_error loc = function
  *     'type_decl' - Camlp5 record representing OCaml type declaration.
  *)
 
-let name_of_type_decl loc type_decl =
+let name_of_type_decl loc type_decl : type_name =
   from_vaval loc (snd (from_vaval loc type_decl.tdNam))
 
-let parameters_of_type_decl loc type_decl =
+let parameters_of_type_decl loc type_decl : parameter list =
   from_vaval loc type_decl.tdPrm
   |> map (fun (type_variable, _variance_flags) ->
       match from_vaval loc type_variable with
@@ -79,96 +80,142 @@ let parameters_of_type_decl loc type_decl =
       | None -> oops loc "wildcard type parameters not supported"
       )
 
-let type_decl_to_description loc td =
-  let type_name = name_of_type_decl loc td in
-  let type_parameters = parameters_of_type_decl loc td in
-  let convert =
-    let convert_concrete typ =
-      let rec inner = function
-      | <:ctyp< ( $list:typs$ ) >> as typ -> Tuple (typ, map inner typs)
-      | <:ctyp< ' $a$ >> as typ -> Variable (typ, a)
-      | <:ctyp< $t$ $a$ >> as typ ->
-          (match inner t, inner a with
-           | _, Arbitrary _ -> Arbitrary typ
-           | Instance (_, targs, tname), a -> Instance (typ, targs@[a], tname)
-           | _ -> Arbitrary typ
-          )
-      | <:ctyp< $q$ . $t$ >> as typ ->
-          (match inner q, inner t with
-           | Instance (_, [], q), Instance (_, [], t) -> Instance (typ, [], q@t)
-           | _ -> Arbitrary typ
-          )
-      | (<:ctyp< $uid:n$ >> | <:ctyp< $lid:n$ >>) as typ -> Instance (typ, [], [n]) | td-> Arbitrary td
-      in
-      let rec replace = function
-      | Tuple (t, typs) -> Tuple (t, map replace typs)
-      | Instance (t, params, qname) as orig when qname = [type_name] ->
-         (try
-           let params =
-             map (function
-                  | Variable (_, a) -> a
-                  | _ -> invalid_arg "Not a variable"
-                 )
-                 params
-           in
-           if params = type_parameters then Self (t, type_parameters, qname) else orig
-          with Invalid_argument "Not a variable" -> orig
-         )
-      | x -> x
-      in
-      replace (inner typ)
-    in
-    function
+
+(** Convert ctyp-expression in simplified and refined typ-expression, that contains information, needed by
+ *  the framework in appropriate form. All original ctyp's preserved as first arguments of typ constructors.
+ *)
+let rec ctyp_to_typ_without_selfs ctyp =
+  match ctyp with
+  | (<:ctyp< $uid: tname$ >> | <:ctyp< $lid: tname$ >>) -> Instance (ctyp, [], [tname])
+  | <:ctyp< ' $type_variable$ >> -> Variable (ctyp, type_variable)
+  | <:ctyp< ( $list: ctyps$ ) >> -> Tuple (ctyp, map ctyp_to_typ_without_selfs ctyps)
+
+  (* Type application case. Type expression ('a, 'b) t (or t 'a 'b in revised syntax) is representing by Camlp5 with
+   *     TyApp (
+   *       TyApp (
+   *         TyLid "t",
+   *         TyQuo "a"),
+   *       TyQuo "b")
+   *  (loc's (source location information, which is the first argument of every AST node) was omitted for clarity),
+   *  so, convertion should be recursive. If any of type arguments of application is Arbitrary (unsupported type),
+   *  the whole type expression is Arbitrary.
+   *)
+  | <:ctyp< $t$ $type_arg$ >> -> (
+      match ctyp_to_typ_without_selfs t, ctyp_to_typ_without_selfs type_arg with
+      | _, Arbitrary _ -> Arbitrary ctyp
+      | Instance (_, targs, tname), arg -> Instance (ctyp, targs @ [arg], tname)
+      | _ -> Arbitrary ctyp
+      )
+
+  | <:ctyp< $qualified$ . $t$ >> -> (
+      match ctyp_to_typ_without_selfs qualified, ctyp_to_typ_without_selfs t with
+      | Instance (_, [], qualified_name), Instance (_, [], [tname]) ->
+          Instance (ctyp, [], qualified_name @ [tname])
+      | _ -> Arbitrary ctyp
+      )
+
+  | _ -> Arbitrary ctyp
+
+
+(** Check all type instances (type constructor applications) in typ-expression and find ones equal to
+ *  current being processed type. Replace all of them with Self.
+ *)
+let rec find_selfs type_name type_parameters : typ -> typ = function
+  | Instance (ctyp, type_args, qualified_name) as orig_typ when qualified_name = [type_name] ->
+      begin try
+        let params =
+          type_args
+          |> map (function
+              | Variable (_, a) -> a
+              | _ -> invalid_arg "Not a variable"
+              )
+        in
+        if params = type_parameters
+        then Self (ctyp, params, qualified_name)
+        else orig_typ
+      with Invalid_argument "Not a variable" -> orig_typ
+      end
+  | Tuple (ctyp, typs) ->
+      Tuple (ctyp, map (find_selfs type_name type_parameters) typs)
+  | typ -> typ
+
+
+let type_decl_to_description loc type_decl =
+  let type_name = name_of_type_decl loc type_decl in
+  let type_parameters = parameters_of_type_decl loc type_decl in
+  let ctyp_to_typ ctyp =
+    ctyp
+    |> ctyp_to_typ_without_selfs
+    |> find_selfs type_name type_parameters
+  in
+  let convert_definition type_definition =
+    let tag_of obj = Obj.tag (Obj.repr obj) in
+    let field_of obj field_index = Obj.field (Obj.repr obj) field_index in
+    let tag = tag_of type_definition in
+    Printf.fprintf stderr "===> tdDef has tag %d" tag;
+    if tag = 3 then begin
+      let ctyp1 = field_of type_definition 1 in
+      let ctyp2 = field_of type_definition 2 in
+      Printf.fprintf stderr " (TyApp) with args loc, %d, %d" (tag_of ctyp1) (tag_of ctyp2)
+    end;
+    Printf.fprintf stderr "\n";
+    match type_definition with
     | <:ctyp< [ $list: constructors$ ] >> | <:ctyp< $_$ == $priv: _$ [ $list: constructors$ ] >> ->
         `Variant (
           constructors
           |> map (fun (loc, cname, cargs, d) ->
-              match d with
-              | None -> `Constructor (from_vaval loc cname, map convert_concrete (from_vaval loc cargs))
-              | _    -> oops loc "unsupported constructor declaration"
-              )
-        )
-
-    | <:ctyp< { $list: fields$ } >> | <:ctyp< $_$ == $priv:_$ { $list: fields$ } >> ->
-        let fields = map (fun (_, name, mut, typ) -> (name, mut, convert_concrete typ)) fields in
-        `Record fields
-
-    | <:ctyp< ( $list: typs$ ) >> ->
-        `Tuple (map convert_concrete typs)
-
-    | <:ctyp< [ = $list: variants$ ] >> ->
-        let unsupported () = oops loc "unsupported polymorphic variant type constructor declaration" in
-        `PolymorphicVariant (
-          variants
-          |> map (function
-              | <:poly_variant< $typ$ >> -> (
-                  match convert_concrete typ with
-                  | Arbitrary _ -> unsupported ()
-                  | typ -> `Type typ
+                  match d with
+                  | None -> `Constructor (from_vaval loc cname, map ctyp_to_typ (from_vaval loc cargs))
+                  | _    -> oops loc "unsupported constructor declaration"
                   )
-              | <:poly_variant< ` $c$ >> -> `Constructor (c, [])
-              | <:poly_variant< ` $c$ of $list: typs$ >> ->
-                  let typs =
-                    flatten (
-                      map (function
-                           | <:ctyp< ( $list: typs$ ) >> -> map convert_concrete typs
-                           | typ -> [convert_concrete typ]
-                          )
-                          typs
-                    )
-                  in
-                  `Constructor (c, typs)
-              | _ -> unsupported ()
-              )
-        )
+            )
 
-    | typ -> (
-        match convert_concrete typ with
-        | Arbitrary _ -> oops loc "unsupported type"
-        | typ         -> `Variant [match typ with Variable (t, _) -> `Tuple [Tuple (<:ctyp< ($list:[t]$) >>, [typ])] | _ -> `Type typ]
-        )
-  in
-  (type_name, type_parameters, convert td.tdDef)
+        | <:ctyp< { $list: fields$ } >> | <:ctyp< $_$ == $priv:_$ { $list: fields$ } >> ->
+            let fields = map (fun (_, name, mut, typ) -> (name, mut, ctyp_to_typ typ)) fields in
+            `Record fields
+
+        | <:ctyp< ( $list: typs$ ) >> ->
+            `Tuple (map ctyp_to_typ typs)
+
+        | <:ctyp< [ = $list: variants$ ] >> ->
+            let unsupported () = oops loc "unsupported polymorphic variant type constructor declaration" in
+            `PolymorphicVariant (
+              variants
+              |> map (function
+                  | <:poly_variant< $typ$ >> -> (
+                      match ctyp_to_typ typ with
+                      | Arbitrary _ -> unsupported ()
+                      | typ -> `Type typ
+                      )
+                  | <:poly_variant< ` $cname$ >> -> `Constructor (cname, [])
+                  | <:poly_variant< ` $cname$ of $list: typs$ >> ->
+                      let converted_typs =
+                        typs
+                        |> map (function
+                            | <:ctyp< ( $list: typs$ ) >> -> map ctyp_to_typ typs
+                            | typ -> [ctyp_to_typ typ]
+                            )
+                        |> flatten
+                      in
+                      `Constructor (cname, converted_typs)
+
+                  | _ -> unsupported ()
+                  )
+            )
+
+        | typ -> (
+            Printf.fprintf stderr "   >   passed into 'typ' branch of matching\n";
+            match ctyp_to_typ typ with
+            | Arbitrary _ -> oops loc "unsupported type"
+            | typ ->
+                `Variant [
+                  match typ with
+                  | Variable (t, _) -> `Tuple [Tuple (<:ctyp< ( $list: [t]$ ) >>, [typ])]
+                  | _ -> `Type typ
+                ]
+            )
+    in
+    (type_name, type_parameters, convert_definition type_decl.tdDef)
 
 let make_descrs mut_rec_type_decls =
   fold_right (fun (loc, type_decl, request) acc ->
