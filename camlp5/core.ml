@@ -51,13 +51,6 @@ let apply_to2 arg1 arg2 func = func arg1 arg2
 
 let snd3 (_, elem2, _) = elem2
 
-let ctyp_of_qname loc qname =
-  let module H = Plugin.Helper (struct let loc = loc end) in H.T.acc (map H.T.id qname)
-
-let ctyp_of_instance loc args qname =
-  let module H = Plugin.Helper (struct let loc = loc end) in
-  H.T.app (qname :: args)
-
 let from_option_with_error loc = function
   | Some v -> v
   | _ -> oops loc "empty option (should not happen)"
@@ -84,7 +77,7 @@ let parameters_of_type_decl loc type_decl : parameter list =
 (** Convert ctyp-expression in simplified and refined typ-expression, that contains information, needed by
  *  the framework in appropriate form. All original ctyp's preserved as first arguments of typ constructors.
  *)
-let rec ctyp_to_typ_without_selfs ctyp =
+let rec ctyp_to_typ_without_selfs ctyp : typ =
   match ctyp with
   | (<:ctyp< $uid: tname$ >> | <:ctyp< $lid: tname$ >>) -> Instance (ctyp, [], [tname])
   | <:ctyp< ' $type_variable$ >> -> Variable (ctyp, type_variable)
@@ -158,51 +151,51 @@ let type_decl_to_description loc type_decl =
                   | None -> `Constructor (from_vaval loc cname, map ctyp_to_typ (from_vaval loc cargs))
                   | _    -> oops loc "unsupported constructor declaration"
                   )
-            )
+        )
 
-        | <:ctyp< { $list: fields$ } >> | <:ctyp< $_$ == $priv:_$ { $list: fields$ } >> ->
-            let fields = map (fun (_, name, mut, typ) -> (name, mut, ctyp_to_typ typ)) fields in
-            `Record fields
+    | <:ctyp< { $list: fields$ } >> | <:ctyp< $_$ == $priv:_$ { $list: fields$ } >> ->
+        let fields = map (fun (_, name, mut, typ) -> (name, mut, ctyp_to_typ typ)) fields in
+        `Record fields
 
-        | <:ctyp< ( $list: typs$ ) >> ->
-            `Tuple (map ctyp_to_typ typs)
+    | <:ctyp< ( $list: typs$ ) >> ->
+        `Tuple (map ctyp_to_typ typs)
 
-        | <:ctyp< [ = $list: variants$ ] >> ->
-            let unsupported () = oops loc "unsupported polymorphic variant type constructor declaration" in
-            `PolymorphicVariant (
-              variants
-              |> map (function
-                  | <:poly_variant< $typ$ >> -> (
-                      match ctyp_to_typ typ with
-                      | Arbitrary _ -> unsupported ()
-                      | typ -> `Type typ
-                      )
-                  | <:poly_variant< ` $cname$ >> -> `Constructor (cname, [])
-                  | <:poly_variant< ` $cname$ of $list: typs$ >> ->
-                      let converted_typs =
-                        typs
-                        |> map (function
-                            | <:ctyp< ( $list: typs$ ) >> -> map ctyp_to_typ typs
-                            | typ -> [ctyp_to_typ typ]
-                            )
-                        |> flatten
-                      in
-                      `Constructor (cname, converted_typs)
-
-                  | _ -> unsupported ()
+    | <:ctyp< [ = $list: variants$ ] >> ->
+        let unsupported () = oops loc "unsupported polymorphic variant type constructor declaration" in
+        `PolymorphicVariant (
+          variants
+          |> map (function
+              | <:poly_variant< $typ$ >> -> (
+                  match ctyp_to_typ typ with
+                  | Arbitrary _ -> unsupported ()
+                  | typ -> `Type typ
                   )
-            )
+              | <:poly_variant< ` $cname$ >> -> `Constructor (cname, [])
+              | <:poly_variant< ` $cname$ of $list: carg_ctyps$ >> ->
+                  let carg_typs =
+                    carg_ctyps
+                    |> map (function
+                        | <:ctyp< ( $list: elem_ctyps$ ) >> -> map ctyp_to_typ elem_ctyps
+                        | ctyp -> [ctyp_to_typ ctyp]
+                        )
+                    |> flatten
+                  in
+                  `Constructor (cname, carg_typs)
 
-        | typ -> (
-            match ctyp_to_typ typ with
-            | Arbitrary _ -> oops loc "unsupported type"
-            | typ ->
-                `Variant [
-                  match typ with
-                  | Variable (t, _) -> `Tuple [Tuple (<:ctyp< ( $list: [t]$ ) >>, [typ])]
-                  | _ -> `Type typ
-                ]
-            )
+              | _ -> unsupported ()
+              )
+        )
+
+    | typ -> (
+        match ctyp_to_typ typ with
+        | Arbitrary _ -> oops loc "unsupported type"
+        | typ ->
+            `Variant [
+              match typ with
+              | Variable (t, _) -> `Tuple [Tuple (<:ctyp< ( $list: [t]$ ) >>, [typ])]
+              | _ -> `Type typ
+            ]
+        )
     in
     (type_name, type_parameters, convert_definition type_decl.tdDef)
 
