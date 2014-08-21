@@ -133,7 +133,19 @@ let rec find_selfs type_name type_parameters : typ -> typ = function
   | typ -> typ
 
 
-let type_decl_to_description loc type_decl =
+let type_decl_to_description loc type_decl : (type_name * parameter list * [
+      | `Variant of [> (* ! *)
+            | `Constructor of string * typ list
+            | `Tuple of typ list
+            | `Type of typ
+          ] list
+      | `PolymorphicVariant of [> (* ! *)
+            | `Constructor of string * typ list
+            | `Type of typ
+          ] list
+      | `Record of (string * bool * typ) list
+      | `Tuple of typ list
+    ]) =
   let type_name = name_of_type_decl loc type_decl in
   let type_parameters = parameters_of_type_decl loc type_decl in
   let ctyp_to_typ ctyp =
@@ -141,7 +153,7 @@ let type_decl_to_description loc type_decl =
     |> ctyp_to_typ_without_selfs
     |> find_selfs type_name type_parameters
   in
-  let convert_definition type_definition =
+  let recognize_top_level_and_convert_rest_to_typ type_definition =
     match type_definition with
     | <:ctyp< [ $list: constructors$ ] >> | <:ctyp< $_$ == $priv: _$ [ $list: constructors$ ] >> ->
         `Variant (
@@ -152,13 +164,6 @@ let type_decl_to_description loc type_decl =
                   | _    -> oops loc "unsupported constructor declaration"
                   )
         )
-
-    | <:ctyp< { $list: fields$ } >> | <:ctyp< $_$ == $priv:_$ { $list: fields$ } >> ->
-        let fields = map (fun (_, name, mut, typ) -> (name, mut, ctyp_to_typ typ)) fields in
-        `Record fields
-
-    | <:ctyp< ( $list: typs$ ) >> ->
-        `Tuple (map ctyp_to_typ typs)
 
     | <:ctyp< [ = $list: variants$ ] >> ->
         let unsupported () = oops loc "unsupported polymorphic variant type constructor declaration" in
@@ -186,18 +191,29 @@ let type_decl_to_description loc type_decl =
               )
         )
 
-    | typ -> (
-        match ctyp_to_typ typ with
+    | <:ctyp< { $list: fields$ } >> | <:ctyp< $_$ == $priv:_$ { $list: fields$ } >> ->
+        let fields = map (fun (_, name, mut, typ) -> (name, mut, ctyp_to_typ typ)) fields in
+        `Record fields
+
+    | <:ctyp< ( $list: typs$ ) >> ->
+        `Tuple (map ctyp_to_typ typs)
+
+
+    (* TODO: Is not clear at all *)
+    | ctyp -> (
+        match ctyp_to_typ ctyp with
         | Arbitrary _ -> oops loc "unsupported type"
-        | typ ->
+        | (Variable _ | Instance _ | Self _) as typ ->
             `Variant [
               match typ with
               | Variable (t, _) -> `Tuple [Tuple (<:ctyp< ( $list: [t]$ ) >>, [typ])]
               | _ -> `Type typ
             ]
+        | _ -> oops loc "internal error: unrecognized tuple in type_decl_to_description, should not be"
         )
     in
-    (type_name, type_parameters, convert_definition type_decl.tdDef)
+    (type_name, type_parameters, recognize_top_level_and_convert_rest_to_typ type_decl.tdDef)
+
 
 let make_descrs mut_rec_type_decls =
   fold_right (fun (loc, type_decl, request) acc ->
