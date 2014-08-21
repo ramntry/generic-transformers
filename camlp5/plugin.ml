@@ -31,12 +31,17 @@ open Dynlink
 open List
 open Printf
 
+type parameter = string
+type type_name = string
+type qualified_name = string list
+type plugin_name = string
+
 type typ  =
   | Arbitrary of ctyp
   | Variable  of ctyp * string
-  | Self      of ctyp * string list * string list
+  | Self      of ctyp * parameter list * qualified_name
   | Tuple     of ctyp * typ list
-  | Instance  of ctyp * typ list * string list
+  | Instance  of ctyp * typ list * qualified_name
 
 let ctyp_of = function
   | Arbitrary t
@@ -99,10 +104,6 @@ let () =
   Pcaml.add_option "-L"
     (Arg.String (fun dir -> load_path := !load_path @ [dir]))
     "<dir> Add <dir> to the list of include directories."
-
-type parameter = string
-type type_name = string
-type plugin_name = string
 
 type properties = {
   inh_t : ctyp;
