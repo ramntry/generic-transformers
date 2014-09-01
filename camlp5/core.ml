@@ -79,9 +79,10 @@ let parameters_of_type_decl loc type_decl : parameter list =
  *)
 let rec ctyp_to_typ_without_selfs ctyp : typ =
   match ctyp with
-  | (<:ctyp< $uid: tname$ >> | <:ctyp< $lid: tname$ >>) -> Instance (ctyp, [], [tname])
-  | <:ctyp< ' $type_variable$ >> -> Variable (ctyp, type_variable)
+  | <:ctyp< ' $type_variable_name$ >> -> Variable (ctyp, type_variable_name)
   | <:ctyp< ( $list: ctyps$ ) >> -> Tuple (ctyp, map ctyp_to_typ_without_selfs ctyps)
+  | (<:ctyp< $uid: type_or_module_name$ >> | <:ctyp< $lid: type_or_module_name$ >>) ->
+      Instance (ctyp, [(* type arguments *)], [type_or_module_name])
 
   (* Type application case. Type expression ('a, 'b) t (or t 'a 'b in revised syntax) is representing by Camlp5 with
    *     TyApp (
@@ -93,17 +94,17 @@ let rec ctyp_to_typ_without_selfs ctyp : typ =
    *  so, convertion should be recursive. If any of type arguments of application is Arbitrary (unsupported type),
    *  the whole type expression is Arbitrary.
    *)
-  | <:ctyp< $t$ $type_arg$ >> -> (
-      match ctyp_to_typ_without_selfs t, ctyp_to_typ_without_selfs type_arg with
-      | _, Arbitrary _ -> Arbitrary ctyp
-      | Instance (_, targs, tname), arg -> Instance (ctyp, targs @ [arg], tname)
+  | <:ctyp< $type_constructor$ $type_arg$ >> -> (
+      match (ctyp_to_typ_without_selfs type_constructor, ctyp_to_typ_without_selfs type_arg) with
+      | (_, Arbitrary _) -> Arbitrary ctyp
+      | (Instance (_, type_args, qualified_name), arg) -> Instance (ctyp, type_args @ [arg], qualified_name)
       | _ -> Arbitrary ctyp
       )
 
-  | <:ctyp< $qualified$ . $t$ >> -> (
-      match ctyp_to_typ_without_selfs qualified, ctyp_to_typ_without_selfs t with
-      | Instance (_, [], qualified_name), Instance (_, [], [tname]) ->
-          Instance (ctyp, [], qualified_name @ [tname])
+  | <:ctyp< $qualified_path$ . $path_item$ >> -> (
+      match (ctyp_to_typ_without_selfs qualified_path, ctyp_to_typ_without_selfs path_item) with
+      | (Instance (_, [], qualified_name), Instance (_, [], [type_or_module_name])) ->
+          Instance (ctyp, [], qualified_name @ [type_or_module_name])
       | _ -> Arbitrary ctyp
       )
 
@@ -111,7 +112,7 @@ let rec ctyp_to_typ_without_selfs ctyp : typ =
 
 
 (** Check all type instances (type constructor applications) in typ-expression and find ones equal to
- *  current being processed type. Replace all of them with Self.
+ *  current being processed type. Replace all of them with Self (see typ type defintion).
  *)
 let rec find_selfs type_name type_parameters : typ -> typ = function
   | Instance (ctyp, type_args, qualified_name) as orig_typ when qualified_name = [type_name] ->
@@ -119,7 +120,7 @@ let rec find_selfs type_name type_parameters : typ -> typ = function
         let params =
           type_args
           |> map (function
-              | Variable (_, a) -> a
+              | Variable (_, var_name) -> var_name
               | _ -> invalid_arg "Not a variable"
               )
         in
@@ -133,8 +134,13 @@ let rec find_selfs type_name type_parameters : typ -> typ = function
   | typ -> typ
 
 
-(** Recognize top level structure of type declaration and label it appropriately. Convert all internals
- *  of that type declaration to typ-expression. Extract type name and list of type parameters.
+let ctyp_to_typ type_name type_parameters ctyp =
+  ctyp
+  |> ctyp_to_typ_without_selfs
+  |> find_selfs type_name type_parameters
+
+(** Recognize top level structure of type declaration and label it appropriately with polymorphic variant tag.
+ * Convert all internals of that type declaration to typ-expression. Extract type name and list of type parameters.
  *)
 let type_decl_to_description loc type_decl : (type_name * parameter list * [
       | `Variant of [> (* ! *)
@@ -151,11 +157,7 @@ let type_decl_to_description loc type_decl : (type_name * parameter list * [
     ]) =
   let type_name = name_of_type_decl loc type_decl in
   let type_parameters = parameters_of_type_decl loc type_decl in
-  let ctyp_to_typ ctyp =
-    ctyp
-    |> ctyp_to_typ_without_selfs
-    |> find_selfs type_name type_parameters
-  in
+  let ctyp_to_my_typ = ctyp_to_typ type_name type_parameters in
   let recognize_top_level_and_convert_rest_to_typ type_definition =
     match type_definition with
     | <:ctyp< [ $list: constructors$ ] >> | <:ctyp< $_$ == $priv: _$ [ $list: constructors$ ] >> ->
@@ -163,7 +165,7 @@ let type_decl_to_description loc type_decl : (type_name * parameter list * [
           constructors
           |> map (fun (loc, cname, cargs, d) ->
                   match d with
-                  | None -> `Constructor (from_vaval loc cname, map ctyp_to_typ (from_vaval loc cargs))
+                  | None -> `Constructor (from_vaval loc cname, map ctyp_to_my_typ (from_vaval loc cargs))
                   | _    -> oops loc "unsupported constructor declaration"
                   )
         )
@@ -174,7 +176,7 @@ let type_decl_to_description loc type_decl : (type_name * parameter list * [
           variants
           |> map (function
               | <:poly_variant< $typ$ >> -> (
-                  match ctyp_to_typ typ with
+                  match ctyp_to_my_typ typ with
                   | Arbitrary _ -> unsupported ()
                   | typ -> `Type typ
                   )
@@ -183,8 +185,8 @@ let type_decl_to_description loc type_decl : (type_name * parameter list * [
                   let carg_typs =
                     carg_ctyps
                     |> map (function
-                        | <:ctyp< ( $list: elem_ctyps$ ) >> -> map ctyp_to_typ elem_ctyps
-                        | ctyp -> [ctyp_to_typ ctyp]
+                        | <:ctyp< ( $list: tuple_elem_ctyps$ ) >> -> map ctyp_to_my_typ tuple_elem_ctyps
+                        | ctyp -> [ctyp_to_my_typ ctyp]
                         )
                     |> flatten
                   in
@@ -195,16 +197,16 @@ let type_decl_to_description loc type_decl : (type_name * parameter list * [
         )
 
     | <:ctyp< { $list: fields$ } >> | <:ctyp< $_$ == $priv:_$ { $list: fields$ } >> ->
-        let fields = map (fun (_, name, mut, typ) -> (name, mut, ctyp_to_typ typ)) fields in
+        let fields = map (fun (_, name, is_mutable, typ) -> (name, is_mutable, ctyp_to_my_typ typ)) fields in
         `Record fields
 
-    | <:ctyp< ( $list: typs$ ) >> ->
-        `Tuple (map ctyp_to_typ typs)
+    | <:ctyp< ( $list: elem_ctyps$ ) >> ->
+        `Tuple (map ctyp_to_my_typ elem_ctyps)
 
 
     (* TODO: It is not clear at all *)
     | ctyp -> (
-        match ctyp_to_typ ctyp with
+        match ctyp_to_my_typ ctyp with
         | Arbitrary _ -> oops loc "unsupported type"
         | (Variable _ | Instance _ | Self _) as typ ->
             `Variant [
@@ -231,6 +233,38 @@ let make_descrs mut_rec_type_decls : (type_name * (parameter list * [> (* descri
   ) mut_rec_type_decls []
 
 
+(** Get names of currently being processed types and types mentioned in polymorphic variant definitions.
+ *  For descrs structure see comment to make_descrs function.
+ *)
+let involved_type_names descrs : type_name list =
+  let processed_mut_rec_types = map fst descrs in
+  descrs
+  |> fold_left (fun acc (_, (_, description, _)) ->
+       match description with
+       | `PolymorphicVariant components ->
+           components
+           |> fold_left (fun local_acc typ ->
+                match typ with
+                | `Type (Instance (_, _, [type_name])) -> type_name :: local_acc
+                | _ -> local_acc
+                )
+                acc
+       | _ -> acc
+       )
+       processed_mut_rec_types
+
+(** Returns piece of AST referred to a general catamorphism
+ *  (in another words, a traversal function) for given qualified type name.
+ *)
+let generic_cata_for_qualified_name loc (is_one_of_processed_mut_rec_types : type_name -> bool) qualified_name =
+  let module H = Plugin.Helper (struct let loc = loc end) in
+  match qualified_name with
+  | [type_name] when is_one_of_processed_mut_rec_types type_name ->
+      <:expr< $lid: cata type_name$ >>
+  | _ ->
+      let gt_record = H.E.acc (map H.E.id qualified_name) in
+      <:expr< $gt_record$.GT.gcata >>
+
 (** mut_rec_type_decls argument is a group of mutual recursive type declarations, in which each element is original
  *  OCaml type declaration and an optional list of plugin names.
  *  If list is present (and maybe empty), the framework will generate a generic traversal function and an abstract
@@ -241,33 +275,10 @@ let make_descrs mut_rec_type_decls : (type_name * (parameter list * [> (* descri
 let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list option) list) =
   let module H = Plugin.Helper (struct let loc = loc end) in
   let descrs = make_descrs mut_rec_type_decls in
-  let is_mut_rec type_name = mem_assoc type_name descrs in
-  let gcata_of_qualified_name = function
-    | [type_name] when is_mut_rec type_name -> H.E.id (cata type_name)
-    | qualified_name ->
-        let gt_record = H.E.acc (map H.E.id qualified_name) in
-        <:expr< $gt_record$.GT.gcata >>
-  in
-  let reserved_names =
-    fold_left
-      (fun acc (_, (_, description, _)) ->
-         match description with
-         | `PolymorphicVariant components ->
-             fold_left
-               (fun acc typ ->
-                  match typ with
-                  | `Type (Instance (_, _, [type_name])) -> type_name :: acc
-                  | _ -> acc
-               )
-               acc
-               components
-         | _ -> acc
-      )
-      (map fst descrs)
-      descrs
-  in
-  let g = name_generator reserved_names in
-  let trans = g#generate "trans" in
+  let is_one_of_processed_mut_rec_types type_name = mem_assoc type_name descrs in
+  let reserved_names = involved_type_names descrs in
+  let name_gen = name_generator reserved_names in
+  let trans = name_gen#generate "trans" in
   let farg =
     let module M = Plugin.StringMap in
     let m = ref M.empty in
@@ -275,13 +286,13 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
        let p = farg a in
        try M.find p !m with
          Not_found ->
-           let n = g#generate p in
+           let n = name_gen#generate p in
            m := M.add p n !m;
            n
     )
   in
-  let subj = g#generate "subj" in
-  let acc = g#generate "inh" in
+  let subj = name_gen#generate "subj" in
+  let acc = name_gen#generate "inh" in
   let generic_cata = <:patt< GT.gcata >> in
   let defs =
     descrs
@@ -493,7 +504,7 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
                        | Instance (_, args, qname) ->
                            let args = map inner args in
                            (match qname with
-                            | [t] when is_mut_rec t && t <> type_name ->
+                            | [t] when is_one_of_processed_mut_rec_types t && t <> type_name ->
                                 H.E.app ((H.E.method_call (H.E.app [H.E.lid "!"; H.E.id context.M.env]) (tmethod t)) :: args)
                             | _  ->
                                 let tobj =
@@ -696,7 +707,7 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
                 in
                 let expr =
                   H.E.app (
-                    (gcata_of_qualified_name qname) ::
+                    (generic_cata_for_qualified_name loc is_one_of_processed_mut_rec_types qname) ::
                     (map (fun a -> H.E.id (farg a)) args @ [H.E.id trans; H.E.id acc; H.E.id subj])
                  )
                 in
