@@ -85,7 +85,7 @@ let rec name_generator list =
 let cata type_name = type_name ^ "_gcata"
 let syn_parameter type_parameter = "s" ^ type_parameter
 let inh_parameter type_parameter = "i" ^ type_parameter
-let farg          name      = "f" ^ name
+let parameter_transform parameter = parameter ^ "_transform"
 let tname         name      = "t" ^ name
 let cmethod       c         = "c_" ^ c
 let vmethod                 = "value"
@@ -122,7 +122,7 @@ type type_descriptor = {
 
 type env = {
   inh : string;
-  subj : string;
+  subject : string;
   new_name : string -> string;
   trait : plugin_name -> typ -> expr option;
 }

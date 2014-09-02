@@ -21,14 +21,16 @@ MODULE_INCLUDES += -I $(top_srcdir)/src
 EXTRA_CMA += $(PACKAGE).cma
 
 # OCaml parser call with flags
-AM_P5FLAGS = -pp "$(CAMLP5O) $(PARSER_INCLUDES) ../camlp5/pa_gt.cmo -L ../plugins"
+CAMLP5_GEN_AST_COMMAND=$(CAMLP5O) $(PARSER_INCLUDES) ../camlp5/pa_gt.cmo -L ../plugins
+CAMLP5_GEN_SRC_COMMAND=$(CAMLP5O) $(PARSER_INCLUDES) ../camlp5/pa_gt.cmo pr_o.cmo -L ../plugins
+AM_P5FLAGS = -pp "$(CAMLP5_GEN_AST_COMMAND)"
 
 # overwrite some variables
 PXFLAGS = $(P5FLAGS)
 CAMLPXLIB = $(CAMLP5LIB)
 MODULE_INCLUDES += -I $(CAMLP5LIB)
 
-TARGET = 
+TARGET =
 
 CLEAN_EXTRA += $(addsuffix .cmi, $(TESTS)) $(addsuffix .cmo, $(TESTS))
 CLEAN_EXTRA += $(addsuffix $(EXEEXT), $(TESTS))
@@ -50,6 +52,7 @@ uninstall-am:
 
 # Rules to build tests
 %: %.ml %.cmi
+	$(CAMLP5_GEN_SRC_COMMAND) $*.ml -o $*_pp.ml
 	$(OCAMLC) $(BFLAGS) $(EXTRA_CMA) $(PXFLAGS) -o $@$(EXEEXT) $<
 
 include $(top_srcdir)/m4/Makefile.am.rules

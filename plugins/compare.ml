@@ -87,7 +87,7 @@ let _ =
           let branch = many env arg cargs in
           <:expr< match $E.id env.inh$ with
                   | $P.app (((if descriptor.is_polyvar then P.variant else P.uid) name)::(map (fun (_, a) -> P.id a) args))$ -> $branch$
-                  | $P.id other$ -> GT.$E.id (if descriptor.is_polyvar then "compare_poly" else "compare_vari")$ $E.id other$ $E.id env.subj$.GT.x
+                  | $P.id other$ -> GT.$E.id (if descriptor.is_polyvar then "compare_poly" else "compare_vari")$ $E.id other$ $E.id env.subject$.GT.x
                   end
           >>
       end

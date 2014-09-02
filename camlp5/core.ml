@@ -203,7 +203,6 @@ let type_decl_to_description loc type_decl : (type_name * parameter list * [
     | <:ctyp< ( $list: elem_ctyps$ ) >> ->
         `Tuple (map ctyp_to_my_typ elem_ctyps)
 
-
     (* TODO: It is not clear at all *)
     | ctyp -> (
         match ctyp_to_my_typ ctyp with
@@ -278,21 +277,10 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
   let is_one_of_processed_mut_rec_types type_name = mem_assoc type_name descrs in
   let reserved_names = involved_type_names descrs in
   let name_gen = name_generator reserved_names in
-  let trans = name_gen#generate "trans" in
-  let farg =
-    let module M = Plugin.StringMap in
-    let m = ref M.empty in
-    (fun a ->
-       let p = farg a in
-       try M.find p !m with
-         Not_found ->
-           let n = name_gen#generate p in
-           m := M.add p n !m;
-           n
-    )
-  in
-  let subj = name_gen#generate "subj" in
-  let acc = name_gen#generate "inh" in
+  let transformer = name_gen#generate "transformer" in
+  let transform_for parameter = parameter_transform parameter in
+  let subject = name_gen#generate "subject" in
+  let initial_inh = name_gen#generate "inh" in
   let generic_cata = <:patt< GT.gcata >> in
   let defs =
     descrs
@@ -336,8 +324,8 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
         let tpo_name = generator#generate "tpo" in
         let self_name = generator#generate "self" in
         let tpo =
-          H.E.obj None (map (fun param ->
-            <:class_str_item< method $lid: param$ = $H.E.id (farg param)$ >>) type_parameters)
+          H.E.obj None (map (fun parameter ->
+            <:class_str_item< method $lid: parameter$ = $H.E.id (transform_for parameter)$ >>) type_parameters)
         in
         let tpf = map (fun param ->
           H.T.arrow (map H.T.var [inh_parameter_of param; param; syn_parameter_of param])) type_parameters in
@@ -349,8 +337,8 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
           let trt = H.T.app (H.T.class_t [class_tt type_name] :: map H.T.var transformer_parameters) in
           H.T.app [gt; H.T.arrow (tpf @ [trt; ft])]
         in
-        let metargs = (map farg type_parameters) @ [trans] in
-        let args = metargs @ [acc; subj] in
+        let metargs = (map transform_for type_parameters) @ [transformer] in
+        let args = metargs @ [initial_inh; subject] in
         let get_type_handler, get_local_defs, get_type_methods =
           let method_decls = ref [type_name, (H.E.id type_name, (type_parameters, H.T.app (H.T.id type_name :: map H.T.var type_parameters)))] in
           let method_defs  = ref [] in
@@ -376,8 +364,8 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
                 try fst (assoc compound_name !method_decls) with
                   Not_found ->
                     let args = fold_left (fun args name -> if mem name args then args else name :: args) [] args in
-                    let body = H.E.app ((H.E.method_call (H.E.id trans) (tmethod compound_name)) ::
-                                        map (fun a -> H.E.id (farg a)) args)
+                    let body = H.E.app ((H.E.method_call (H.E.id transformer) (tmethod compound_name)) ::
+                                        map (fun a -> H.E.id (transform_for a)) args)
                     in
                     let impl = H.P.id compound_name, body in
                     let name = H.E.id compound_name in
@@ -493,14 +481,14 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
             let branch met_name met_args gen =
               let rec env = {
                 Plugin.inh      = g#generate "inh";
-                Plugin.subj     = g#generate "subj";
+                Plugin.subject     = g#generate "subject";
                 Plugin.new_name = (fun s -> g#generate s);
                 Plugin.trait    =
                   (fun s t ->
                      if s = trait
                      then
                        let rec inner = function
-                       | Variable (_, a) -> H.E.gt_tp (H.E.id env.Plugin.subj) a
+                       | Variable (_, a) -> H.E.gt_tp (H.E.id env.Plugin.subject) a
                        | Instance (_, args, qname) ->
                            let args = map inner args in
                            (match qname with
@@ -514,7 +502,7 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
                                 in
                                 H.E.app ([H.E.acc (map H.E.id ["GT"; "transform"]); H.E.acc (map H.E.id qname)] @ args @ [tobj])
                            )
-                       | Self _ -> H.E.gt_f (H.E.id env.Plugin.subj)
+                       | Self _ -> H.E.gt_f (H.E.id env.Plugin.subject)
                        | _ -> invalid_arg "Unsupported type"
                        in (try Some (inner t) with Invalid_argument "Unsupported type" -> None)
                      else None
@@ -522,7 +510,7 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
               }
               in
               let m_def =
-                let body = H.E.func (map H.P.id ([env.Plugin.inh; env.Plugin.subj] @ met_args)) (gen env) in
+                let body = H.E.func (map H.P.id ([env.Plugin.inh; env.Plugin.subject] @ met_args)) (gen env) in
                 <:class_str_item< method $lid:met_name$ = $body$ >>
               in
               {context with M.proto_items = m_def :: context.M.proto_items}
@@ -617,12 +605,12 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
             H.T.arrow (typs @ [H.T.var syn])
           in
           let expr =
-            let met = H.E.method_call (H.E.id trans) met_name in
+            let met = H.E.method_call (H.E.id transformer) met_name in
             let garg f x =
               H.E.app [<:expr< GT.make >>; f; x; H.E.id tpo_name]
             in
             H.E.app (
-              [met; H.E.id acc; garg (H.E.id self_name) (H.E.id subj)] @
+              [met; H.E.id initial_inh; garg (H.E.id self_name) (H.E.id subject)] @
               (map (fun (typ, x) ->
                       let rec augmented = function
                       | Arbitrary _ | Instance _ -> false
@@ -631,7 +619,7 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
                       in
                       let rec augment id = function
                       | Arbitrary _ | Instance _ ->  H.E.id id
-                      | Variable (_, name)       -> garg (H.E.id (farg name)) (H.E.id id)
+                      | Variable (_, name)       -> garg (H.E.id (transform_for name)) (H.E.id id)
                       | Self     (typ, args, t)  ->
                           let name = get_type_handler (typ, args, t) in
                           garg name (H.E.id id)
@@ -708,10 +696,10 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
                 let expr =
                   H.E.app (
                     (generic_cata_for_qualified_name loc is_one_of_processed_mut_rec_types qname) ::
-                    (map (fun a -> H.E.id (farg a)) args @ [H.E.id trans; H.E.id acc; H.E.id subj])
+                    (map (fun a -> H.E.id (transform_for a)) args @ [H.E.id transformer; H.E.id initial_inh; H.E.id subject])
                  )
                 in
-                (H.P.alias (H.P.type_p qname) (H.P.id subj), VaVal None, expr),
+                (H.P.alias (H.P.type_p qname) (H.P.id subject), VaVal None, expr),
                 [<:class_str_item< inherit $ce$ >>],
                 [<:class_sig_item< inherit $ct class_t$  >>],
                 [<:class_sig_item< inherit $ct class_tt$ >>],
@@ -720,7 +708,7 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
             | _ -> oops loc "unsupported case (internal error)"
           )
         in
-        let subj = H.E.id subj in
+        let subject = H.E.id subject in
         let local_defs_and_then expr =
           let local_defs =
             get_local_defs () @
@@ -744,7 +732,7 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
         let class_expr =
           let this = generator#generate "this" in
           let body =
-            let args = map farg type_parameters in
+            let args = map transform_for type_parameters in
             H.E.func (map H.P.id args) (H.E.app ((H.E.acc (map H.E.id ["GT"; "transform"])) :: map H.E.id (type_name :: args@[this])))
           in
           let met = <:class_str_item< method $lid:tmethod type_name$ = $body$ >> in
@@ -771,7 +759,7 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
         let body =
           if is_abbrev
           then let (_, _, expr), _ = hdtl loc cases in expr
-          else local_defs_and_then (H.E.match_e subj cases)
+          else local_defs_and_then (H.E.match_e subject cases)
         in
         (H.P.constr (H.P.id type_name) catype, H.E.record [generic_cata, H.E.id (cata type_name)]),
         (H.P.id (cata type_name), (H.E.func (map H.P.id args) body)),
