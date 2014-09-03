@@ -264,6 +264,23 @@ let generic_cata_for_qualified_name loc (is_one_of_processed_mut_rec_types : typ
       let gt_record = H.E.acc (map H.E.id qualified_name) in
       <:expr< $gt_record$.GT.gcata >>
 
+(** Create a fresh (namespace : name_hint -> actual_name) which is an associative array of unique (with respect to given
+ *  name_generator instance) actual names with name hints as array keys.
+ *)
+let create_namespace (name_generator : < generate : string -> string; .. >) : string -> string =
+  let new_namespace () =
+    let module StringMap = Plugin.StringMap in
+    let already_generated_names = ref StringMap.empty in
+    fun name_hint ->
+      match StringMap.option_find name_hint !already_generated_names with
+      | Some actual_name -> actual_name
+      | None ->
+          let actual_name = name_generator#generate name_hint in
+          already_generated_names := StringMap.add name_hint actual_name !already_generated_names;
+          actual_name
+  in
+  new_namespace ()
+
 (** mut_rec_type_decls argument is a group of mutual recursive type declarations, in which each element is original
  *  OCaml type declaration and an optional list of plugin names.
  *  If list is present (and maybe empty), the framework will generate a generic traversal function and an abstract
@@ -277,10 +294,16 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
   let is_one_of_processed_mut_rec_types type_name = mem_assoc type_name descrs in
   let reserved_names = involved_type_names descrs in
   let name_gen = name_generator reserved_names in
+
+  (** Generate names of generic catamorphism's actual arguments *)
   let transformer = name_gen#generate "transformer" in
-  let transform_for parameter = parameter_transform parameter in
+  let transform_for =
+    let actual_name_for = create_namespace name_gen in
+    fun parameter -> actual_name_for (parameter_transform parameter)
+  in
   let subject = name_gen#generate "subject" in
   let initial_inh = name_gen#generate "inh" in
+
   let generic_cata = <:patt< GT.gcata >> in
   let defs =
     descrs

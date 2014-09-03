@@ -68,9 +68,9 @@ let map_last loc f l =
 
 exception Bad_plugin of string
 
-let rec name_generator list =
+let rec name_generator reserved_names =
   let module S = Set.Make (String) in
-  let s = ref (fold_right S.add list S.empty) in
+  let s = ref (fold_right S.add reserved_names S.empty) in
   object(self)
     method copy = name_generator (S.elements !s)
     method generate prompt =
@@ -354,12 +354,17 @@ let generate_inherit base_class loc qname arg descr prop =
 
 module StringMap =
   struct
-    type 'a t = (string * 'a) list
+    type 'value t = (string * 'value) list
 
-    let empty        = []
-    let add name x l = (name, x) :: l
-    let find         = assoc
-    let mem name   l = try (ignore (find name l)); true with Not_found -> false
+    let empty = []
+    let add key value t = (key, value) :: t
+    let mem = mem_assoc
+    let find = assoc
+
+    let option_find key t =
+      try
+        Some (find key t)
+      with Not_found -> None
   end
 
 let plugin_processors : processor StringMap.t ref = ref StringMap.empty
