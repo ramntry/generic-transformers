@@ -281,6 +281,50 @@ let create_namespace (name_generator : < generate : string -> string; .. >) : st
   in
   new_namespace ()
 
+
+module Names = struct
+
+  module Transformer (Args : sig
+    val loc : loc
+    val type_parameters : parameter list
+  end) = struct
+    open Args
+
+    (** Generate names for transformer classes: for their type parameters *)
+    let defs_name_gen = name_generator type_parameters
+
+    let attribute_parameters =
+      type_parameters
+      |> map (fun param ->
+          ( param,
+            ( defs_name_gen#generate (inh_parameter param),
+              defs_name_gen#generate (syn_parameter param))))
+
+    let attribute_parameters_of type_parameter =
+      try assoc type_parameter attribute_parameters
+      with Not_found -> oops loc "type variable image not found (should not happen)"
+
+    let inh_parameter_of type_parameter = fst (attribute_parameters_of type_parameter)
+    let syn_parameter_of type_parameter = snd (attribute_parameters_of type_parameter)
+    let inh = defs_name_gen#generate "inh"
+    let syn = defs_name_gen#generate "syn"
+
+    let transformer_parameters =
+      let depending_on_type_parameters =
+        attribute_parameters
+        |> map (fun (param, (inh_param, syn_param)) -> [param; inh_param; syn_param])
+        |> flatten
+      in
+      depending_on_type_parameters @ [inh; syn]
+
+    (* ... and some values. *)
+    let parameter_transforms = defs_name_gen#generate "parameter_transforms"
+    let self_name = defs_name_gen#generate "self"
+  end
+
+end
+
+
 (** mut_rec_type_decls argument is a group of mutual recursive type declarations, in which each element is original
  *  OCaml type declaration and an optional list of plugin names.
  *  If list is present (and maybe empty), the framework will generate a generic traversal function and an abstract
@@ -317,6 +361,11 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
           | _ -> false
         in
 
+        let module TransformerNames = Names.Transformer (struct
+            let loc = loc
+            let type_parameters = type_parameters
+          end)
+        in
         (** Generate names for transformer classes: for their type parameters *)
         let defs_name_gen = name_generator type_parameters in
         let attribute_parameters =
