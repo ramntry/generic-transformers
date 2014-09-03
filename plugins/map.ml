@@ -46,7 +46,7 @@ let _ =
           method tuple env elems = E.tuple (map (map_arg env) elems)
 
           method constructor env name args =
-            E.app (((if descriptor.is_polyvar then E.variant else E.id) name)::
+            E.app (((if descriptor.is_polymorphic_variant then E.variant else E.id) name)::
                    map (map_arg env) args
                   )
         end

@@ -52,7 +52,7 @@ let _ =
           method tuple env elems =
             body env (E.str "(") (E.str ")") (E.str ", ") (wrap_id elems)
           method constructor env name args =
-            body env (E.str ((if descriptor.is_polyvar then "`" else "") ^ name ^ " (")) (E.str ")") (E.str ", ") (wrap_id args)
+            body env (E.str ((if descriptor.is_polymorphic_variant then "`" else "") ^ name ^ " (")) (E.str ")") (E.str ", ") (wrap_id args)
         end
      )
     )

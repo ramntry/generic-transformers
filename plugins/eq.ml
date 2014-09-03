@@ -16,11 +16,11 @@ let _ =
         let ng   = name_generator descriptor.parameters in
         let self = ng#generate "self" in
         {
-          inh_t = if descriptor.is_polyvar
+          inh_t = if descriptor.is_polymorphic_variant
                   then T.app (T.id (type_open_t descriptor.name) :: map T.var (self :: descriptor.parameters))
                   else T.app (T.id descriptor.name :: map T.var descriptor.parameters);
           syn_t = T.id "bool";
-          transformer_parameters = if descriptor.is_polyvar then self :: descriptor.parameters else descriptor.parameters;
+          transformer_parameters = if descriptor.is_polymorphic_variant then self :: descriptor.parameters else descriptor.parameters;
           inh_t_of_parameter = (fun a -> T.var a);
           syn_t_of_parameter = (fun _ -> T.id "bool");
         },
@@ -84,7 +84,7 @@ let _ =
             let arg  a = assoc a args in
             let branch = many env arg cargs in
             <:expr< match $E.id env.inh$ with
-                    | $P.app (((if descriptor.is_polyvar then P.variant else P.uid) name)::(map (fun (_, a) -> P.id a) args))$ -> $branch$
+                    | $P.app (((if descriptor.is_polymorphic_variant then P.variant else P.uid) name)::(map (fun (_, a) -> P.id a) args))$ -> $branch$
                     | _ -> False
                     end
             >>

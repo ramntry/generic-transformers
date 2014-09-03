@@ -17,11 +17,11 @@ let _ =
     H.(
       {
         inh_t =
-          if descriptor.is_polyvar
+          if descriptor.is_polymorphic_variant
           then T.app (T.id (type_open_t descriptor.name) :: map T.var (self :: descriptor.parameters))
           else T.app (T.id descriptor.name :: map T.var descriptor.parameters);
         syn_t = <:ctyp< GT.comparison >>;
-        transformer_parameters = if descriptor.is_polyvar then self :: descriptor.parameters else descriptor.parameters;
+        transformer_parameters = if descriptor.is_polymorphic_variant then self :: descriptor.parameters else descriptor.parameters;
         inh_t_of_parameter = (fun type_parameter -> T.var type_parameter);
         syn_t_of_parameter = (fun _ -> <:ctyp< GT.comparison >>);
       },
@@ -86,8 +86,8 @@ let _ =
           let arg  a = assoc a args in
           let branch = many env arg cargs in
           <:expr< match $E.id env.inh$ with
-                  | $P.app (((if descriptor.is_polyvar then P.variant else P.uid) name)::(map (fun (_, a) -> P.id a) args))$ -> $branch$
-                  | $P.id other$ -> GT.$E.id (if descriptor.is_polyvar then "compare_poly" else "compare_vari")$ $E.id other$ $E.id env.subject$.GT.x
+                  | $P.app (((if descriptor.is_polymorphic_variant then P.variant else P.uid) name)::(map (fun (_, a) -> P.id a) args))$ -> $branch$
+                  | $P.id other$ -> GT.$E.id (if descriptor.is_polymorphic_variant then "compare_poly" else "compare_vari")$ $E.id other$ $E.id env.subject$.GT.x
                   end
           >>
       end

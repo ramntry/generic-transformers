@@ -114,7 +114,7 @@ type properties = {
 }
 
 type type_descriptor = {
-  is_polyvar : bool;
+  is_polymorphic_variant : bool;
   parameters : parameter list;
   name : type_name;
   default_properties : properties;

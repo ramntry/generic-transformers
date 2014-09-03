@@ -292,32 +292,39 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
   let module H = Plugin.Helper (struct let loc = loc end) in
   let descrs = make_descrs mut_rec_type_decls in
   let is_one_of_processed_mut_rec_types type_name = mem_assoc type_name descrs in
-  let reserved_names = involved_type_names descrs in
-  let name_gen = name_generator reserved_names in
 
   (** Generate names of generic catamorphism's actual arguments *)
+  let reserved_names = involved_type_names descrs in
+  let name_gen = name_generator reserved_names in
   let transformer = name_gen#generate "transformer" in
-  let transform_for =
+  let transform_for : parameter -> string =
     let actual_name_for = create_namespace name_gen in
     fun parameter -> actual_name_for (parameter_transform parameter)
   in
   let subject = name_gen#generate "subject" in
   let initial_inh = name_gen#generate "inh" in
 
+  (* TODO: I don't understand what exactly this quotation means *)
   let generic_cata = <:patt< GT.gcata >> in
+
   let defs =
     descrs
     |> map (fun (type_name, (type_parameters, description, plugin_names)) ->
         Plugin.load_plugins plugin_names;
-        let is_polyvar =
+        let is_polymorphic_variant =
           match description with
           | `PolymorphicVariant _ -> true
           | _ -> false
         in
-        let generator = name_generator type_parameters in
-        let attribute_parameters = type_parameters |> map (fun type_parameter ->
-            type_parameter,
-            (generator#generate (inh_parameter type_parameter), generator#generate (syn_parameter type_parameter)))
+
+        (** Generate names for transformer classes: for their type parameters *)
+        let defs_name_gen = name_generator type_parameters in
+        let attribute_parameters =
+          type_parameters
+          |> map (fun param ->
+              ( param,
+                ( defs_name_gen#generate (inh_parameter param),
+                  defs_name_gen#generate (syn_parameter param))))
         in
         let attribute_parameters_of type_parameter =
           try assoc type_parameter attribute_parameters
@@ -325,27 +332,33 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
         in
         let inh_parameter_of type_parameter = fst (attribute_parameters_of type_parameter) in
         let syn_parameter_of type_parameter = snd (attribute_parameters_of type_parameter) in
-        let inh = generator#generate "inh" in
-        let syn = generator#generate "syn" in
+        let inh = defs_name_gen#generate "inh" in
+        let syn = defs_name_gen#generate "syn" in
         let transformer_parameters =
-          (attribute_parameters |> map (fun (param, (inh_param, syn_param)) -> [param; inh_param; syn_param]) |> flatten)
-          @ [inh; syn]
+          let depending_on_type_parameters =
+            attribute_parameters
+            |> map (fun (param, (inh_param, syn_param)) -> [param; inh_param; syn_param])
+            |> flatten
+          in
+          depending_on_type_parameters @ [inh; syn]
         in
+        (* ... and some values. *)
+        let parameter_transforms = defs_name_gen#generate "parameter_transforms" in
+        let self_name = defs_name_gen#generate "self" in
+
         let type_descriptor  = {
-          is_polyvar = is_polyvar;
+          is_polymorphic_variant = is_polymorphic_variant;
           parameters = type_parameters;
           name = type_name;
           default_properties = {
-            inh_t = H.T.var inh;
-            syn_t = H.T.var syn;
+            inh_t = <:ctyp< ' $inh$ >>;
+            syn_t = <:ctyp< ' $syn$ >>;
             transformer_parameters = transformer_parameters;
-            syn_t_of_parameter = (fun type_parameter -> H.T.var (syn_parameter_of type_parameter));
-            inh_t_of_parameter = (fun type_parameter -> H.T.var (inh_parameter_of type_parameter));
+            syn_t_of_parameter = (fun param -> <:ctyp< ' $syn_parameter_of param$ >>);
+            inh_t_of_parameter = (fun param -> <:ctyp< ' $inh_parameter_of param$ >>);
           };
         }
         in
-        let tpo_name = generator#generate "tpo" in
-        let self_name = generator#generate "self" in
         let tpo =
           H.E.obj None (map (fun parameter ->
             <:class_str_item< method $lid: parameter$ = $H.E.id (transform_for parameter)$ >>) type_parameters)
@@ -449,7 +462,7 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
                           param, (g#generate (inh_parameter param), g#generate (syn_parameter param))) args
                         in
                         let type_descriptor  = {
-                          is_polyvar = false;
+                          is_polymorphic_variant = false;
                           parameters = args;
                           name = t;
                           default_properties = {
@@ -562,7 +575,7 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
                     n
                   in
                   let type_descriptor = {
-                    is_polyvar = is_polyvar;
+                    is_polymorphic_variant = is_polymorphic_variant;
                     parameters = args;
                     name = name;
                     default_properties = prop;
@@ -630,7 +643,7 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
           let expr =
             let met = H.E.method_call (H.E.id transformer) met_name in
             let garg f x =
-              H.E.app [<:expr< GT.make >>; f; x; H.E.id tpo_name]
+              H.E.app [<:expr< GT.make >>; f; x; H.E.id parameter_transforms]
             in
             H.E.app (
               [met; H.E.id initial_inh; garg (H.E.id self_name) (H.E.id subject)] @
@@ -649,7 +662,7 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
                       | Tuple    (_, typs) as typ ->
                           if augmented typ
                           then
-                            let generator  = generator#copy in
+                            let generator  = defs_name_gen#copy in
                             let components = mapi (fun i _ -> generator#generate (sprintf "e%d" i)) typs in
                             H.E.let_nrec
                               [H.P.tuple (map H.P.id components), H.E.id id]
@@ -690,14 +703,14 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
             | `Record fields as case ->
                 iter (add_derived_member case) derived;
                 let names, _, types = split3 fields in
-                let args = map (fun a -> generator#generate a) names in
+                let args = map (fun a -> defs_name_gen#generate a) names in
                 let patt = H.P.record (map (fun (n, a) -> H.P.id n, H.P.id a) (combine names args)) in
                 case_branch patt vmethod args types
 
             | `Constructor (cname, cargs) as case ->
                 iter (add_derived_member case) derived;
                 let args = mapi (fun i a -> sprintf "p%d" i) cargs in
-                let patt = H.P.app ((if is_polyvar then H.P.variant else H.P.id) cname :: map H.P.id args) in
+                let patt = H.P.app ((if is_polymorphic_variant then H.P.variant else H.P.id) cname :: map H.P.id args) in
                 case_branch patt (cmethod cname) args cargs
 
             | `Type (Instance (_, args, qname)) as case ->
@@ -736,7 +749,7 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
           let local_defs =
             get_local_defs () @
             [H.P.id self_name, H.E.app (H.E.id (cata type_name) :: map H.E.id metargs);
-             H.P.id tpo_name, tpo
+             H.P.id parameter_transforms, tpo
             ]
           in
           match local_defs with
@@ -746,14 +759,14 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
         let cases, methods, methods_sig, methods_sig_t, base_types = split5 match_cases in
         let type_methods, type_methods_sig = split (get_type_methods ()) in
         let base_types = flatten base_types in
-        let is_abbrev = not is_polyvar && length base_types = 1 in
+        let is_abbrev = not is_polymorphic_variant && length base_types = 1 in
         let methods = flatten methods in
         let methods_sig = flatten methods_sig in
         let methods_sig_t = flatten methods_sig_t in
         (* proto_class_type -> meta_class_type *)
         let proto_class_type = <:class_type< object $list: methods_sig_t @ type_methods_sig$ end >> in
         let class_expr =
-          let this = generator#generate "this" in
+          let this = defs_name_gen#generate "this" in
           let body =
             let args = map transform_for type_parameters in
             H.E.func (map H.P.id args) (H.E.app ((H.E.acc (map H.E.id ["GT"; "transform"])) :: map H.E.id (type_name :: args@[this])))
@@ -790,8 +803,8 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
         (type_class_def, type_class_decl),
         (let env, protos, defs, edecls, pdecls, decls = split6 (map get_derived_classes derived) in
          class_def, (flatten env)@protos, defs, class_decl::(flatten edecls)@pdecls@decls)
-      )
-  in
+      ) (* defs = descrs |> map (fun (type_name, (type_parameters, description, plugin_names)) -> ... all code within THESE parentheses ... ) *)
+  in (* let defs = ... IN *)
   let open_type td =
     match td.tdDef with
     | <:ctyp< [ = $list:lcons$ ] >> ->
