@@ -281,35 +281,33 @@ let create_namespace (name_generator : < generate : string -> string; .. >) : st
   in
   new_namespace ()
 
-
 module Names = struct
-
-  module Transformer (Args : sig
+  module Transformer (FunctorArgs : sig
     val loc : loc
     val type_parameters : parameter list
   end) = struct
-    open Args
+    open FunctorArgs
 
     (** Generate names for transformer classes: for their type parameters *)
-    let defs_name_gen = name_generator type_parameters
+    let generator = name_generator type_parameters
 
     let attribute_parameters =
       type_parameters
       |> map (fun param ->
           ( param,
-            ( defs_name_gen#generate (inh_parameter param),
-              defs_name_gen#generate (syn_parameter param))))
+            ( generator#generate (inh_parameter param),
+              generator#generate (syn_parameter param))))
 
     let attribute_parameters_of type_parameter =
       try assoc type_parameter attribute_parameters
       with Not_found -> oops loc "type variable image not found (should not happen)"
 
-    let inh_parameter_of type_parameter = fst (attribute_parameters_of type_parameter)
-    let syn_parameter_of type_parameter = snd (attribute_parameters_of type_parameter)
-    let inh = defs_name_gen#generate "inh"
-    let syn = defs_name_gen#generate "syn"
+    let inh_for type_parameter = fst (attribute_parameters_of type_parameter)
+    let syn_for type_parameter = snd (attribute_parameters_of type_parameter)
+    let inh = generator#generate "inh"
+    let syn = generator#generate "syn"
 
-    let transformer_parameters =
+    let parameters =
       let depending_on_type_parameters =
         attribute_parameters
         |> map (fun (param, (inh_param, syn_param)) -> [param; inh_param; syn_param])
@@ -318,12 +316,29 @@ module Names = struct
       depending_on_type_parameters @ [inh; syn]
 
     (* ... and some values. *)
-    let parameter_transforms = defs_name_gen#generate "parameter_transforms"
-    let self_name = defs_name_gen#generate "self"
+    let parameter_transforms = generator#generate "parameter_transforms"
+    let self = generator#generate "self"
   end
 
-end
+  module Catamorphism (FunctorArgs : sig
+    val reserved_names : string list
+  end) = struct
+    open FunctorArgs
 
+    let reserved = reserved_names
+
+    (** Generate names of generic catamorphism's actual arguments *)
+    let generator = name_generator reserved_names
+    let transformer = generator#generate "transformer"
+
+    let transform_for : parameter -> string =
+      let actual_name_for = create_namespace generator in
+      fun parameter -> actual_name_for (parameter_transform parameter)
+
+    let subject = generator#generate "subject"
+    let initial_inh = generator#generate "initial_inh"
+  end
+end
 
 (** mut_rec_type_decls argument is a group of mutual recursive type declarations, in which each element is original
  *  OCaml type declaration and an optional list of plugin names.
@@ -335,101 +350,62 @@ end
 let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list option) list) =
   let module H = Plugin.Helper (struct let loc = loc end) in
   let descrs = make_descrs mut_rec_type_decls in
-  let is_one_of_processed_mut_rec_types type_name = mem_assoc type_name descrs in
-
-  (** Generate names of generic catamorphism's actual arguments *)
-  let reserved_names = involved_type_names descrs in
-  let name_gen = name_generator reserved_names in
-  let transformer = name_gen#generate "transformer" in
-  let transform_for : parameter -> string =
-    let actual_name_for = create_namespace name_gen in
-    fun parameter -> actual_name_for (parameter_transform parameter)
+  let module CatamorphismNames = Names.Catamorphism (struct
+      let reserved_names = involved_type_names descrs
+    end)
   in
-  let subject = name_gen#generate "subject" in
-  let initial_inh = name_gen#generate "inh" in
-
-  (* TODO: I don't understand what exactly this quotation means *)
+  let is_one_of_processed_mut_rec_types type_name = mem_assoc type_name descrs in
+  (* TODO: I don't understand what exactly quotation below means *)
   let generic_cata = <:patt< GT.gcata >> in
-
   let defs =
     descrs
     |> map (fun (type_name, (type_parameters, description, plugin_names)) ->
         Plugin.load_plugins plugin_names;
-        let is_polymorphic_variant =
-          match description with
-          | `PolymorphicVariant _ -> true
-          | _ -> false
-        in
-
         let module TransformerNames = Names.Transformer (struct
             let loc = loc
             let type_parameters = type_parameters
           end)
         in
-        (** Generate names for transformer classes: for their type parameters *)
-        let defs_name_gen = name_generator type_parameters in
-        let attribute_parameters =
-          type_parameters
-          |> map (fun param ->
-              ( param,
-                ( defs_name_gen#generate (inh_parameter param),
-                  defs_name_gen#generate (syn_parameter param))))
+        let is_polymorphic_variant =
+          match description with
+          | `PolymorphicVariant _ -> true
+          | _ -> false
         in
-        let attribute_parameters_of type_parameter =
-          try assoc type_parameter attribute_parameters
-          with Not_found -> oops loc "type variable image not found (should not happen)"
-        in
-        let inh_parameter_of type_parameter = fst (attribute_parameters_of type_parameter) in
-        let syn_parameter_of type_parameter = snd (attribute_parameters_of type_parameter) in
-        let inh = defs_name_gen#generate "inh" in
-        let syn = defs_name_gen#generate "syn" in
-        let transformer_parameters =
-          let depending_on_type_parameters =
-            attribute_parameters
-            |> map (fun (param, (inh_param, syn_param)) -> [param; inh_param; syn_param])
-            |> flatten
-          in
-          depending_on_type_parameters @ [inh; syn]
-        in
-        (* ... and some values. *)
-        let parameter_transforms = defs_name_gen#generate "parameter_transforms" in
-        let self_name = defs_name_gen#generate "self" in
-
         let type_descriptor  = {
           is_polymorphic_variant = is_polymorphic_variant;
           parameters = type_parameters;
           name = type_name;
           default_properties = {
-            inh_t = <:ctyp< ' $inh$ >>;
-            syn_t = <:ctyp< ' $syn$ >>;
-            transformer_parameters = transformer_parameters;
-            syn_t_of_parameter = (fun param -> <:ctyp< ' $syn_parameter_of param$ >>);
-            inh_t_of_parameter = (fun param -> <:ctyp< ' $inh_parameter_of param$ >>);
+            inh_t = <:ctyp< ' $TransformerNames.inh$ >>;
+            syn_t = <:ctyp< ' $TransformerNames.syn$ >>;
+            transformer_parameters = TransformerNames.parameters;
+            syn_t_of_parameter = (fun param -> <:ctyp< ' $TransformerNames.syn_for param$ >>);
+            inh_t_of_parameter = (fun param -> <:ctyp< ' $TransformerNames.inh_for param$ >>);
           };
         }
         in
         let tpo =
           H.E.obj None (map (fun parameter ->
-            <:class_str_item< method $lid: parameter$ = $H.E.id (transform_for parameter)$ >>) type_parameters)
+            <:class_str_item< method $lid: parameter$ = $H.E.id (CatamorphismNames.transform_for parameter)$ >>) type_parameters)
         in
         let tpf = map (fun param ->
-          H.T.arrow (map H.T.var [inh_parameter_of param; param; syn_parameter_of param])) type_parameters in
+          H.T.arrow (map H.T.var [TransformerNames.inh_for param; param; TransformerNames.syn_for param])) type_parameters in
         let tpt = H.T.obj (combine type_parameters tpf) false in
         let catype =
           let typ = H.T.app (H.T.id type_name :: map H.T.var type_parameters) in
           let gt = H.T.acc [H.T.id "GT"; H.T.id "t"] in
-          let ft = H.T.arrow [H.T.var inh; typ; H.T.var syn] in
-          let trt = H.T.app (H.T.class_t [class_tt type_name] :: map H.T.var transformer_parameters) in
+          let ft = H.T.arrow [H.T.var TransformerNames.inh; typ; H.T.var TransformerNames.syn] in
+          let trt = H.T.app (H.T.class_t [class_tt type_name] :: map H.T.var TransformerNames.parameters) in
           H.T.app [gt; H.T.arrow (tpf @ [trt; ft])]
         in
-        let metargs = (map transform_for type_parameters) @ [transformer] in
-        let args = metargs @ [initial_inh; subject] in
+        let metargs = (map CatamorphismNames.transform_for type_parameters) @ [CatamorphismNames.transformer] in
+        let args = metargs @ [CatamorphismNames.initial_inh; CatamorphismNames.subject] in
         let get_type_handler, get_local_defs, get_type_methods =
           let method_decls = ref [type_name, (H.E.id type_name, (type_parameters, H.T.app (H.T.id type_name :: map H.T.var type_parameters)))] in
           let method_defs  = ref [] in
           let get_type_handler (ctyp, args, qname) =
             if type_parameters = args && qname = [type_name]
-            then H.E.id self_name
+            then H.E.id TransformerNames.self
             else
               let compound_name =
                 let b = Buffer.create 64 in
@@ -449,8 +425,8 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
                 try fst (assoc compound_name !method_decls) with
                   Not_found ->
                     let args = fold_left (fun args name -> if mem name args then args else name :: args) [] args in
-                    let body = H.E.app ((H.E.method_call (H.E.id transformer) (tmethod compound_name)) ::
-                                        map (fun a -> H.E.id (transform_for a)) args)
+                    let body = H.E.app ((H.E.method_call (H.E.id CatamorphismNames.transformer) (tmethod compound_name)) ::
+                                        map (fun a -> H.E.id (CatamorphismNames.transform_for a)) args)
                     in
                     let impl = H.P.id compound_name, body in
                     let name = H.E.id compound_name in
@@ -464,8 +440,10 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
           (fun () -> !method_defs),
           (fun () ->
             (!method_decls |> map (fun (name, (_, (args, t))) ->
-             let targs   = map (fun a -> H.T.arrow [H.T.var (inh_parameter_of a); H.T.var a; H.T.var (syn_parameter_of a)]) args in
-             let msig    = H.T.arrow (targs @ [H.T.var inh; t; H.T.var syn]) in
+             let targs =
+               map (fun a -> H.T.arrow [H.T.var (TransformerNames.inh_for a); H.T.var a; H.T.var (TransformerNames.syn_for a)]) args
+             in
+             let msig    = H.T.arrow (targs @ [H.T.var TransformerNames.inh; t; H.T.var TransformerNames.syn]) in
              <:class_str_item< method virtual $lid:tmethod name$ : $msig$ >>,
              <:class_sig_item< method $lid:tmethod name$ : $msig$ >>)))
         in
@@ -495,11 +473,11 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
               let get trait =
                 try M.find trait !m
                 with Not_found ->
-                  let g    = name_generator reserved_names in
+                  let g = name_generator CatamorphismNames.reserved in
                   let this = g#generate "this" in
-                  let env  = g#generate "env"  in
+                  let env = g#generate "env"  in
                   let self = g#generate "self" in
-                  let cn   = g#generate ("c_" ^ type_name) in
+                  let cn = g#generate ("c_" ^ type_name) in
                   let vals, inits, methods, env_methods = split4 (
                     map
                       (fun (t, (args, _, _)) ->
@@ -515,8 +493,8 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
                           parameters = args;
                           name = t;
                           default_properties = {
-                            inh_t = H.T.var inh;
-                            syn_t = H.T.var syn;
+                            inh_t = H.T.var TransformerNames.inh;
+                            syn_t = H.T.var TransformerNames.syn;
                             transformer_parameters = args;
                             syn_t_of_parameter = (fun type_parameter -> H.T.var (snd (assoc type_parameter attribute_parameters)));
                             inh_t_of_parameter = (fun type_parameter -> H.T.var (fst (assoc type_parameter attribute_parameters)));
@@ -678,24 +656,24 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
             let make_a x y z = H.T.app [<:ctyp< GT.a >>; x; y; z; tpt] in
             let rec make_typ = function
             | Arbitrary t | Instance (t, _, _) -> t
-            | Variable (t, name) -> make_a (H.T.var (inh_parameter_of name)) t (H.T.var (syn_parameter_of name))
-            | Self     (t, _, _) -> make_a (H.T.var inh) t (H.T.var syn)
+            | Variable (t, name) -> make_a (H.T.var (TransformerNames.inh_for name)) t (H.T.var (TransformerNames.syn_for name))
+            | Self     (t, _, _) -> make_a (H.T.var TransformerNames.inh) t (H.T.var TransformerNames.syn)
             | Tuple    (t, typs) -> H.T.tuple (map make_typ typs)
             in
-            let typs = [H.T.var inh;
-                        make_a (H.T.var inh) (H.T.app (H.T.id type_name :: map H.T.var type_parameters)) (H.T.var syn)
+            let typs = [H.T.var TransformerNames.inh;
+                        make_a (H.T.var TransformerNames.inh) (H.T.app (H.T.id type_name :: map H.T.var type_parameters)) (H.T.var TransformerNames.syn)
                        ] @
                        (map make_typ types)
             in
-            H.T.arrow (typs @ [H.T.var syn])
+            H.T.arrow (typs @ [H.T.var TransformerNames.syn])
           in
           let expr =
-            let met = H.E.method_call (H.E.id transformer) met_name in
+            let met = H.E.method_call (H.E.id CatamorphismNames.transformer) met_name in
             let garg f x =
-              H.E.app [<:expr< GT.make >>; f; x; H.E.id parameter_transforms]
+              H.E.app [<:expr< GT.make >>; f; x; H.E.id TransformerNames.parameter_transforms]
             in
             H.E.app (
-              [met; H.E.id initial_inh; garg (H.E.id self_name) (H.E.id subject)] @
+              [met; H.E.id CatamorphismNames.initial_inh; garg (H.E.id TransformerNames.self) (H.E.id CatamorphismNames.subject)] @
               (map (fun (typ, x) ->
                       let rec augmented = function
                       | Arbitrary _ | Instance _ -> false
@@ -704,14 +682,14 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
                       in
                       let rec augment id = function
                       | Arbitrary _ | Instance _ ->  H.E.id id
-                      | Variable (_, name)       -> garg (H.E.id (transform_for name)) (H.E.id id)
+                      | Variable (_, name)       -> garg (H.E.id (CatamorphismNames.transform_for name)) (H.E.id id)
                       | Self     (typ, args, t)  ->
                           let name = get_type_handler (typ, args, t) in
                           garg name (H.E.id id)
                       | Tuple    (_, typs) as typ ->
                           if augmented typ
                           then
-                            let generator  = defs_name_gen#copy in
+                            let generator  = TransformerNames.generator#copy in
                             let components = mapi (fun i _ -> generator#generate (sprintf "e%d" i)) typs in
                             H.E.let_nrec
                               [H.P.tuple (map H.P.id components), H.E.id id]
@@ -752,7 +730,7 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
             | `Record fields as case ->
                 iter (add_derived_member case) derived;
                 let names, _, types = split3 fields in
-                let args = map (fun a -> defs_name_gen#generate a) names in
+                let args = map (fun a -> TransformerNames.generator#generate a) names in
                 let patt = H.P.record (map (fun (n, a) -> H.P.id n, H.P.id a) (combine names args)) in
                 case_branch patt vmethod args types
 
@@ -765,7 +743,11 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
             | `Type (Instance (_, args, qname)) as case ->
                 let args = map (function Variable (_, a) -> a | _ -> oops loc "unsupported case (non-variable in instance)") args in (* TODO *)
                 iter (add_derived_member case) derived;
-                let targs = flatten (map (fun a -> [a; inh_parameter_of a; syn_parameter_of a]) args) @ [inh; syn] in
+                let targs =
+                  flatten (map (fun a ->
+                    [a; TransformerNames.inh_for a; TransformerNames.syn_for a]) args)
+                  @ [TransformerNames.inh; TransformerNames.syn]
+                in
                 let targs = map H.T.var targs in
                 let ce    = <:class_expr< [ $list:targs$ ] $list:map_last loc class_t qname$ >> in
                 let ct f  =
@@ -781,10 +763,12 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
                 let expr =
                   H.E.app (
                     (generic_cata_for_qualified_name loc is_one_of_processed_mut_rec_types qname) ::
-                    (map (fun a -> H.E.id (transform_for a)) args @ [H.E.id transformer; H.E.id initial_inh; H.E.id subject])
+                    (map (fun a ->
+                      H.E.id (CatamorphismNames.transform_for a))
+                      args @ [H.E.id CatamorphismNames.transformer; H.E.id CatamorphismNames.initial_inh; H.E.id CatamorphismNames.subject])
                  )
                 in
-                (H.P.alias (H.P.type_p qname) (H.P.id subject), VaVal None, expr),
+                (H.P.alias (H.P.type_p qname) (H.P.id CatamorphismNames.subject), VaVal None, expr),
                 [<:class_str_item< inherit $ce$ >>],
                 [<:class_sig_item< inherit $ct class_t$  >>],
                 [<:class_sig_item< inherit $ct class_tt$ >>],
@@ -793,12 +777,12 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
             | _ -> oops loc "unsupported case (internal error)"
           )
         in
-        let subject = H.E.id subject in
+        let subject = H.E.id CatamorphismNames.subject in
         let local_defs_and_then expr =
           let local_defs =
             get_local_defs () @
-            [H.P.id self_name, H.E.app (H.E.id (cata type_name) :: map H.E.id metargs);
-             H.P.id parameter_transforms, tpo
+            [H.P.id TransformerNames.self, H.E.app (H.E.id (cata type_name) :: map H.E.id metargs);
+             H.P.id TransformerNames.parameter_transforms, tpo
             ]
           in
           match local_defs with
@@ -815,9 +799,9 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
         (* proto_class_type -> meta_class_type *)
         let proto_class_type = <:class_type< object $list: methods_sig_t @ type_methods_sig$ end >> in
         let class_expr =
-          let this = defs_name_gen#generate "this" in
+          let this = TransformerNames.generator#generate "this" in
           let body =
-            let args = map transform_for type_parameters in
+            let args = map CatamorphismNames.transform_for type_parameters in
             H.E.func (map H.P.id args) (H.E.app ((H.E.acc (map H.E.id ["GT"; "transform"])) :: map H.E.id (type_name :: args@[this])))
           in
           let met = <:class_str_item< method $lid:tmethod type_name$ = $body$ >> in
@@ -827,7 +811,7 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
         let class_info ~is_virtual class_name class_definition = {
           ciLoc = loc;
           ciVir = Ploc.VaVal is_virtual;
-          ciPrm = (loc, Ploc.VaVal (map (fun a -> Ploc.VaVal (Some a), None) transformer_parameters));
+          ciPrm = (loc, Ploc.VaVal (map (fun a -> Ploc.VaVal (Some a), None) TransformerNames.parameters));
           ciNam = Ploc.VaVal class_name;
           ciExp = class_definition;
         }
