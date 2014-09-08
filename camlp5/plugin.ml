@@ -174,7 +174,10 @@ module Helper (L : sig val loc : loc end) =
         let class_t   qname      = <:ctyp< # $list:qname$ >>
         let label     s t        = <:ctyp< ~$s$: $t$ >>
         let manifest  t1 priv t2 = <:ctyp< $t1$ == $priv:priv$ $t2$ >>
-        let obj       lst ell    = <:ctyp< < $list:lst$ $flag:ell$ > >>
+
+        let obj (methods : (string * ctyp) list) ~is_open_type =
+          <:ctyp< < $list: methods$ $flag: is_open_type$ > >>
+
         let opt_label s t        = <:ctyp< ?$s$: $t$ >>
         let package   mt         = <:ctyp< (module $mt$) >>
         let polymorph lst t      = <:ctyp< ! $list:lst$ . $t$ >>
@@ -274,7 +277,7 @@ module Helper (L : sig val loc : loc end) =
         let let_module  s me e     = <:expr< let module $uid:s$ = $me$ in $e$ >>
         let match_e     e pe       = <:expr< match $e$ with [ $list:pe$ ] >>
         let new_e       list       = <:expr< new $list:list$ >>
-        let obj         p list     = <:expr< object $opt:p$ $list:list$ end >>
+        let obj ?self_pattern list_of_items = <:expr< object $opt: self_pattern$ $list: list_of_items$ end >>
         let opt_label   p oe       = <:expr< ?{ $p$ $opt:oe$ } >>
         let override    list       = <:expr< {< $list:list$ >} >>
         let module_e    me         = <:expr< ( module $me$ ) >>
