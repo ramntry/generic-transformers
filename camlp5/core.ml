@@ -420,43 +420,41 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
     <:class_sig_item< method $lid: tmethod type_name$ : $catamorphism_curried_by_transformer$ >>
   in
 (* ===--------------------------------------------------------------------=== *)
-  let is_one_of_processed_mut_rec_types type_name = mem_assoc type_name descrs in
   let case_branch patt method_name arg_names arg_typs =
     let method_ctyp =
       transformer_method_ctyp loc properties type_instance_ctyp parameter_transforms_obj_ctyp arg_typs
     in
     let expr =
-      let method_call = H.E.method_call (H.E.id CatamorphismNames.transformer) method_name in
-      let gt_make transform non_augmented_arg = H.E.app
-        [<:expr< GT.make >>; transform; non_augmented_arg; H.E.id TransformerNames.parameter_transforms_obj]
+      let method_selection = H.E.method_selection (H.E.id CatamorphismNames.transformer) method_name in
+      let gt_make arg_transform non_augmented_arg = H.E.app
+        [<:expr< GT.make >>; arg_transform; non_augmented_arg; H.E.id TransformerNames.parameter_transforms_obj]
       in
       H.E.app (
-        [method_call; H.E.id CatamorphismNames.initial_inh; gt_make (H.E.id TransformerNames.self) (H.E.id CatamorphismNames.subject)] @
-        (map (fun (typ, x) ->
-                let rec augmented = function
+        [method_selection; H.E.id CatamorphismNames.initial_inh; gt_make (H.E.id TransformerNames.self) (H.E.id CatamorphismNames.subject)] @
+        map (fun (arg_typ, arg_name) ->
+                let rec should_be_augmented = function
                 | Arbitrary _ | Instance _ -> false
                 | Self      _ | Variable _ -> true
-                | Tuple (_, typs) -> exists augmented typs
+                | Tuple (_, typs) -> exists should_be_augmented typs
                 in
                 let rec augment id = function
                 | Arbitrary _ | Instance _ ->  H.E.id id
-                | Variable (_, name)       -> gt_make (H.E.id (CatamorphismNames.transform_for name)) (H.E.id id)
-                | Self     (typ, args, t)  -> gt_make (H.E.id TransformerNames.self) (H.E.id id)
-                | Tuple    (_, typs) as typ ->
-                    if augmented typ
+                | Variable (_, name) -> gt_make (H.E.id (CatamorphismNames.transform_for name)) (H.E.id id)
+                | Self (typ, args, t) -> gt_make (H.E.id TransformerNames.self) (H.E.id id)
+                | Tuple (_, typs) as typ ->
+                    if should_be_augmented typ
                     then
-                      let generator  = TransformerNames.generator#copy in
-                      let components = mapi (fun i _ -> generator#generate (sprintf "e%d" i)) typs in
+                      let name_generator = TransformerNames.generator#copy in
+                      let tuple_element_names = mapi (fun i _ -> name_generator#generate (sprintf "element%d" i)) typs in
                       H.E.let_nrec
-                        [H.P.tuple (map H.P.id components), H.E.id id]
-                        (H.E.tuple (map (fun (name, typ) -> augment name typ) (combine components typs)))
+                        [H.P.tuple (map H.P.id tuple_element_names), H.E.id id]
+                        (H.E.tuple (map (fun (name, typ) -> augment name typ) (combine tuple_element_names typs)))
                     else H.E.id id
                 in
-                augment x typ
+                augment arg_name arg_typ
              )
              (combine arg_typs arg_names)
         )
-      )
     in
     (patt, VaVal None, expr),
     [<:class_str_item< method virtual $lid: method_name$ : $method_ctyp$ >>],
@@ -465,6 +463,7 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
     []
   in
 (* ===--------------------------------------------------------------------=== *)
+  let is_one_of_processed_mut_rec_types type_name = mem_assoc type_name descrs in
   let add_derived_member, get_derived_classes =
     let obj_magic = <:expr< Obj.magic >> in
     let module M = struct
@@ -523,7 +522,7 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
                 let mtype   = H.T.arrow (targs @ [inh_t; typ; prop.Plugin.syn_t]) in
                 <:class_str_item< value mutable $lid:ct$ = $H.E.app [obj_magic; H.E.unit]$ >>,
                 (H.E.assign (H.E.id ct) (H.E.app [H.E.new_e [proto_t]; H.E.id self])),
-                <:class_str_item< method $mt$ : $mtype$ = $H.E.method_call (H.E.id ct) mt$ >>,
+                <:class_str_item< method $mt$ : $mtype$ = $H.E.method_selection (H.E.id ct) mt$ >>,
                 <:class_sig_item< method $tmethod t$ : $mtype$ >>
               )
               (remove_assoc type_name descrs)
@@ -569,7 +568,7 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
                      let args = map inner args in
                      (match qname with
                       | [t] when is_one_of_processed_mut_rec_types t && t <> type_name ->
-                          H.E.app ((H.E.method_call (H.E.app [H.E.lid "!"; H.E.id context.M.env]) (tmethod t)) :: args)
+                          H.E.app ((H.E.method_selection (H.E.app [H.E.lid "!"; H.E.id context.M.env]) (tmethod t)) :: args)
                       | _  ->
                           let tobj =
                             match qname with

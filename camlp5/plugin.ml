@@ -285,7 +285,7 @@ module Helper (L : sig val loc : loc end) =
         let record      list       = <:expr< { $list:list$ } >>
         let record_with e list     = <:expr< { ($e$) with $list:list$} >>
         let seq         list       = <:expr< do { $list:list$ } >>
-        let method_call e m        = <:expr< $e$ # $m$ >>
+        let method_selection e m        = <:expr< $e$ # $m$ >>
         let selem       s i        = <:expr< $s$ . [$i$] >>
         let str         s          = <:expr< $str:s$ >>
         let try_e       e list     = <:expr< try $e$ with [ $list:list$ ] >>
@@ -299,7 +299,7 @@ module Helper (L : sig val loc : loc end) =
         let gt_f         = gt_field "f"
         let gt_x         = gt_field "x"
         let gt_fx        = gt_field "fx"
-        let gt_tp e p    = method_call (gt_field "t" e) p
+        let gt_tp e p    = method_selection (gt_field "t" e) p
 
       end
   end
