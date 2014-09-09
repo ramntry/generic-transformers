@@ -127,7 +127,7 @@ type env = {
   trait : plugin_name -> typ -> expr option;
 }
 
-class virtual generator =
+class virtual plugin_generator =
   object
     method header     = ([] : str_item list)
     method header_sig = ([] : sig_item list)
@@ -136,7 +136,7 @@ class virtual generator =
     method virtual record      : env -> (string * (string * bool * typ)) list -> expr
   end
 
-type processor = loc -> type_descriptor -> properties * generator
+type processor = loc -> type_descriptor -> properties * plugin_generator
 
 module Helper (L : sig val loc : loc end) =
   struct
