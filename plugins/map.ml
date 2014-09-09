@@ -38,7 +38,7 @@ let _ =
             )
         in
         object
-          inherit generator
+          inherit plugin_generator
           method record env fields =
             let values = map (map_arg env) (map (fun (n, (_, _, t)) -> n, t) fields) in
             E.record (combine (map (fun (_, (n, _, _)) -> P.id n) fields) values)

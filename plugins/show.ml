@@ -46,7 +46,7 @@ let _ =
           ) @@ stop
         in
         object
-          inherit generator
+          inherit plugin_generator
           method record env fields =
             body env (E.str "{") (E.str "}") (E.str "; ") (map (fun (a, (f, _, t)) -> a, t, (fun x -> (E.str (f ^ "=")) @@ x)) fields)
           method tuple env elems =

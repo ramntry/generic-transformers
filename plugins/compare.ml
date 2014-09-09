@@ -61,7 +61,7 @@ let _ =
           args
       in
       object
-        inherit generator
+        inherit plugin_generator
         method record env fields =
           let args   = map (fun a -> a, env.new_name a) (map fst fields) in
           let arg  a = assoc a args in

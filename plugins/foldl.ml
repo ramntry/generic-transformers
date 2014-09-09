@@ -39,7 +39,7 @@ let _ =
             args
         in
         object
-          inherit generator
+          inherit plugin_generator
           method record      env fields    = body env (map (fun (n, (_, _, t)) -> n, t) fields)
           method tuple       env elems     = body env elems
           method constructor env name args = body env args

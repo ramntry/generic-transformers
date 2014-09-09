@@ -12,7 +12,11 @@ autom4te.cache
 *.swp
 config.log
 config.status
+*_pp*.ml
+*_pp*.mli
 *.pp
+*.ast
+.exrc
 aclocal.m4
 configure
 config/*
@@ -20,3 +24,6 @@ config/!mktemp.sh
 
 create_new_test.sh
 check.sh
+check_err
+check_out
+cat_core.mli.sh
