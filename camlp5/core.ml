@@ -50,6 +50,7 @@ let split6 l =
 let apply_to2 arg1 arg2 func = func arg1 arg2
 
 let snd3 (_, elem2, _) = elem2
+let push4 (elem1, elem2, elem3, elem4) elem5 = (elem1, elem2, elem3, elem4, elem5)
 
 let from_option_with_error loc = function
   | Some v -> v
@@ -420,49 +421,6 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
     <:class_sig_item< method $lid: tmethod type_name$ : $catamorphism_curried_by_transformer$ >>
   in
 (* ===--------------------------------------------------------------------=== *)
-  let case_branch patt method_name arg_names arg_typs =
-    let method_ctyp =
-      transformer_method_ctyp loc properties type_instance_ctyp parameter_transforms_obj_ctyp arg_typs
-    in
-    let expr =
-      let method_selection = H.E.method_selection (H.E.id CatamorphismNames.transformer) method_name in
-      let gt_make arg_transform non_augmented_arg = H.E.app
-        [<:expr< GT.make >>; arg_transform; non_augmented_arg; H.E.id TransformerNames.parameter_transforms_obj]
-      in
-      H.E.app (
-        [method_selection; H.E.id CatamorphismNames.initial_inh; gt_make (H.E.id TransformerNames.self) (H.E.id CatamorphismNames.subject)] @
-        map (fun (arg_typ, arg_name) ->
-                let rec should_be_augmented = function
-                | Arbitrary _ | Instance _ -> false
-                | Self      _ | Variable _ -> true
-                | Tuple (_, typs) -> exists should_be_augmented typs
-                in
-                let rec augment id = function
-                | Arbitrary _ | Instance _ ->  H.E.id id
-                | Variable (_, name) -> gt_make (H.E.id (CatamorphismNames.transform_for name)) (H.E.id id)
-                | Self (typ, args, t) -> gt_make (H.E.id TransformerNames.self) (H.E.id id)
-                | Tuple (_, typs) as typ ->
-                    if should_be_augmented typ
-                    then
-                      let name_generator = TransformerNames.generator#copy in
-                      let tuple_element_names = mapi (fun i _ -> name_generator#generate (sprintf "element%d" i)) typs in
-                      H.E.let_nrec
-                        [H.P.tuple (map H.P.id tuple_element_names), H.E.id id]
-                        (H.E.tuple (map (fun (name, typ) -> augment name typ) (combine tuple_element_names typs)))
-                    else H.E.id id
-                in
-                augment arg_name arg_typ
-             )
-             (combine arg_typs arg_names)
-        )
-    in
-    (patt, VaVal None, expr),
-    [<:class_str_item< method virtual $lid: method_name$ : $method_ctyp$ >>],
-    [<:class_sig_item< method virtual $lid: method_name$ : $method_ctyp$ >>],
-    [<:class_sig_item< method $lid: method_name$ : $method_ctyp$ >>],
-    []
-  in
-(* ===--------------------------------------------------------------------=== *)
   let is_one_of_processed_mut_rec_types type_name = mem_assoc type_name descrs in
   let add_derived_member, get_derived_classes =
     let obj_magic = <:expr< Obj.magic >> in
@@ -664,6 +622,48 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
     )
   in
 (* ===--------------------------------------------------------------------=== *)
+  let generic_cata_match_case pattern method_name arg_names arg_typs =
+    let method_ctyp =
+      transformer_method_ctyp loc properties type_instance_ctyp parameter_transforms_obj_ctyp arg_typs
+    in
+    let expr =
+      let method_selection = H.E.method_selection (H.E.id CatamorphismNames.transformer) method_name in
+      let gt_make arg_transform non_augmented_arg =
+         H.E.app [<:expr< GT.make >>; arg_transform; non_augmented_arg; H.E.id TransformerNames.parameter_transforms_obj]
+      in
+      H.E.app (
+        [method_selection; H.E.id CatamorphismNames.initial_inh; gt_make (H.E.id TransformerNames.self) (H.E.id CatamorphismNames.subject)] @
+        map (fun (arg_typ, arg_name) ->
+                let rec should_be_augmented = function
+                | Arbitrary _ | Instance _ -> false
+                | Self      _ | Variable _ -> true
+                | Tuple (_, typs) -> exists should_be_augmented typs
+                in
+                let rec augment id = function
+                | Arbitrary _ | Instance _ ->  H.E.id id
+                | Variable (_, name) -> gt_make (H.E.id (CatamorphismNames.transform_for name)) (H.E.id id)
+                | Self (typ, args, t) -> gt_make (H.E.id TransformerNames.self) (H.E.id id)
+                | Tuple (_, typs) as typ ->
+                    if should_be_augmented typ
+                    then
+                      let name_generator = TransformerNames.generator#copy in
+                      let tuple_element_names = mapi (fun i _ -> name_generator#generate (sprintf "element%d" i)) typs in
+                      H.E.let_nrec
+                        [H.P.tuple (map H.P.id tuple_element_names), H.E.id id]
+                        (H.E.tuple (map (fun (name, typ) -> augment name typ) (combine tuple_element_names typs)))
+                    else H.E.id id
+                in
+                augment arg_name arg_typ
+             )
+             (combine arg_typs arg_names)
+        )
+    in
+    (pattern, VaVal None, expr),
+    [<:class_str_item< method virtual $lid: method_name$ : $method_ctyp$ >>],
+    [<:class_sig_item< method virtual $lid: method_name$ : $method_ctyp$ >>],
+    [<:class_sig_item< method $lid: method_name$ : $method_ctyp$ >>]
+  in
+(* ===--------------------------------------------------------------------=== *)
   let plugin_properties_and_generators = apply_plugins loc type_descriptor plugin_names in
   let match_cases = (
     match description with
@@ -676,21 +676,23 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
       | `Tuple elements as case ->
           iter (add_derived_member case) plugin_properties_and_generators;
           let args = mapi (fun i a -> sprintf "p%d" i) elements in
-          let patt = H.P.tuple (map H.P.id args) in
-          case_branch patt vmethod args elements
+          let pattern = H.P.tuple (map H.P.id args) in
+          push4 (generic_cata_match_case pattern vmethod args elements) []
 
       | `Record fields as case ->
           iter (add_derived_member case) plugin_properties_and_generators;
           let names, _, types = split3 fields in
           let args = map (fun a -> TransformerNames.generator#generate a) names in
-          let patt = H.P.record (map (fun (n, a) -> H.P.id n, H.P.id a) (combine names args)) in
-          case_branch patt vmethod args types
+          let pattern = H.P.record (map (fun (n, a) -> H.P.id n, H.P.id a) (combine names args)) in
+          push4 (generic_cata_match_case pattern vmethod args types) []
 
-      | `Constructor (cname, cargs) as case ->
-          iter (add_derived_member case) plugin_properties_and_generators;
-          let args = mapi (fun i a -> sprintf "p%d" i) cargs in
-          let patt = H.P.app ((if is_polymorphic_variant then H.P.variant else H.P.id) cname :: map H.P.id args) in
-          case_branch patt (cmethod cname) args cargs
+      | `Constructor (cname, carg_typs) as constructor ->
+          iter (add_derived_member constructor) plugin_properties_and_generators;
+          let carg_names = mapi (fun i _ -> sprintf "arg%d" i) carg_typs in
+          let constructor_tag = (if is_polymorphic_variant then H.P.variant else H.P.id) cname in
+          let pattern = H.P.app (constructor_tag :: map H.P.id carg_names) in
+          let transformer_method_name = cmethod cname in
+          push4 (generic_cata_match_case pattern transformer_method_name carg_names carg_typs) []
 
       | `Type (Instance (_, args, qname)) as case ->
           let args = map (function Variable (_, a) -> a | _ -> oops loc "unsupported case (non-variable in instance)") args in (* TODO *)
