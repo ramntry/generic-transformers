@@ -31,26 +31,37 @@ open MLast
 open Ploc
 open Plugin
 
-let split3 l =
-  List.fold_right
-    (fun (a, b, c) (x, y, z) -> a::x, b::y, c::z) l ([], [], [])
+(** Simple utility functions, working with lists, tuples, and functions that are not available in
+ *  the standard library.
+ *
+ *  Numeric suffix for names of these functions is the number of elements in a tuple or a number of
+ *  arguments of functions with which they work. The return value can contain a different number of
+ *  elements, or have a different arity.
+ *)
+let split3 list_of_tuples =
+  List.fold_right (fun (a, b, c) (x, y, z) ->
+    (a :: x, b :: y, c :: z)) list_of_tuples ([], [], [])
 
-let split4 l =
-  List.fold_right
-    (fun (a, b, c, d) (x, y, z, t) -> a::x, b::y, c::z, d::t) l ([], [], [], [])
+let split4 list_of_tuples =
+  List.fold_right (fun (a, b, c, d) (x, y, z, u) ->
+    (a :: x, b :: y, c :: z, d :: u)) list_of_tuples ([], [], [], [])
 
-let split5 l =
-  List.fold_right
-    (fun (a, b, c, d, e) (x, y, z, t, h) -> a::x, b::y, c::z, d::t, e::h) l ([], [], [], [], [])
+let split5 list_of_tuples =
+  List.fold_right (fun (a, b, c, d, e) (x, y, z, u, v) ->
+    (a :: x, b :: y, c :: z, d :: u, e :: v)) list_of_tuples ([], [], [], [], [])
 
-let split6 l =
-  List.fold_right
-    (fun (a, b, c, d, e, f) (x, y, z, t, h, i) -> a::x, b::y, c::z, d::t, e::h, f::i) l ([], [], [], [], [], [])
+let split6 list_of_tuples =
+  List.fold_right (fun (a, b, c, d, e, f) (x, y, z, u, v, w) ->
+    (a :: x, b :: y, c :: z, d :: u, e :: v, f :: w)) list_of_tuples ([], [], [], [], [], [])
 
 let apply_to2 arg1 arg2 func = func arg1 arg2
+let map2 func (e1, e2) = (func e1, func e2)
 
-let snd3 (_, elem2, _) = elem2
-let push4 (elem1, elem2, elem3, elem4) elem5 = (elem1, elem2, elem3, elem4, elem5)
+let snd3 (_, e2, _) = e2
+let push4 (e1, e2, e3, e4) e = (e1, e2, e3, e4, e)
+let insert2_2 e (e1, e2) = (e1, e, e2)
+let unshift3 e (e1, e2, e3) = (e, e1, e2, e3)
+
 
 let from_option_with_error loc = function
   | Some v -> v
@@ -82,8 +93,8 @@ let rec ctyp_to_typ_without_selfs ctyp : typ =
   match ctyp with
   | <:ctyp< ' $type_variable_name$ >> -> Variable (ctyp, type_variable_name)
   | <:ctyp< ( $list: ctyps$ ) >> -> Tuple (ctyp, map ctyp_to_typ_without_selfs ctyps)
-  | (<:ctyp< $uid: type_or_module_name$ >> | <:ctyp< $lid: type_or_module_name$ >>) ->
-      Instance (ctyp, [(* type arguments *)], [type_or_module_name])
+  | (<:ctyp< $uid: module_or_type_name$ >> | <:ctyp< $lid: module_or_type_name$ >>) ->
+      Instance (ctyp, [(* type arguments *)], [module_or_type_name])
 
   (* Type application case. Type expression ('a, 'b) t (or t 'a 'b in revised syntax) is representing by Camlp5 with
    *     TyApp (
@@ -103,9 +114,9 @@ let rec ctyp_to_typ_without_selfs ctyp : typ =
       )
 
   | <:ctyp< $qualified_path$ . $path_item$ >> -> (
-      match (ctyp_to_typ_without_selfs qualified_path, ctyp_to_typ_without_selfs path_item) with
-      | (Instance (_, [], qualified_name), Instance (_, [], [type_or_module_name])) ->
-          Instance (ctyp, [], qualified_name @ [type_or_module_name])
+      match map2 ctyp_to_typ_without_selfs (qualified_path, path_item) with
+      | (Instance (_, [], qualified_name), Instance (_, [], [module_or_type_name])) ->
+          Instance (ctyp, [], qualified_name @ [module_or_type_name])
       | _ -> Arbitrary ctyp
       )
 
@@ -220,6 +231,15 @@ let type_decl_to_description loc type_decl : (type_name * parameter list * [
     (type_name, type_parameters, recognize_top_level_and_convert_rest_to_typ type_decl.tdDef)
 
 
+(** Return list of type case descriptions. Variant or polymorphic variant type has as many
+ *  cases as constructors, tuple or record consist of one case - the tuple or record itself.
+ *)
+let type_case_descriptions description =
+  match description with
+  | (`Variant constructors | `PolymorphicVariant constructors) -> constructors
+  | (`Tuple _ | `Record _) as tuple_or_record -> [tuple_or_record]
+
+
 (** Get names of currently being processed types and types mentioned in polymorphic variant definitions.
  *  For descrs structure see comment to make_descrs function.
  *)
@@ -239,6 +259,7 @@ let involved_type_names descrs : type_name list =
        | _ -> acc
        )
        processed_mut_rec_types
+
 
 (** Returns piece of AST referred to a general catamorphism
  *  (in another words, a traversal function) for given qualified type name.
@@ -342,7 +363,7 @@ let apply_plugins loc type_descriptor plugin_names : (plugin_name * (properties 
   in
   combine plugin_names properties_and_generators
 
-let transformer_method_ctyp loc properties type_instance_ctyp parameter_transforms_obj_ctyp arg_typs =
+let match_case_method_ctyp loc properties type_instance_ctyp parameter_transforms_obj_ctyp arg_typs =
   let module H = Plugin.Helper (struct let loc = loc end) in
   let augmented_arg inh arg_type syn =
     H.T.app [<:ctyp< GT.a >>; inh; arg_type; syn; parameter_transforms_obj_ctyp]
@@ -623,9 +644,6 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
   in
 (* ===--------------------------------------------------------------------=== *)
   let generic_cata_match_case pattern method_name arg_names arg_typs =
-    let method_ctyp =
-      transformer_method_ctyp loc properties type_instance_ctyp parameter_transforms_obj_ctyp arg_typs
-    in
     let expr =
       let method_selection = H.E.method_selection (H.E.id CatamorphismNames.transformer) method_name in
       let gt_make arg_transform non_augmented_arg =
@@ -658,79 +676,89 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
              (combine arg_typs arg_names)
         )
     in
-    (pattern, VaVal None, expr),
-    [<:class_str_item< method virtual $lid: method_name$ : $method_ctyp$ >>],
-    [<:class_sig_item< method virtual $lid: method_name$ : $method_ctyp$ >>],
-    [<:class_sig_item< method $lid: method_name$ : $method_ctyp$ >>]
+    (pattern, expr)
+  in
+  let class_items_for_match_case_method method_name arg_typs =
+    let method_ctyp =
+      match_case_method_ctyp loc properties type_instance_ctyp parameter_transforms_obj_ctyp arg_typs
+    in
+    ( [<:class_str_item< method virtual $lid: method_name$ : $method_ctyp$ >>],
+      [<:class_sig_item< method virtual $lid: method_name$ : $method_ctyp$ >>],
+      [<:class_sig_item< method $lid: method_name$ : $method_ctyp$ >>] )
   in
 (* ===--------------------------------------------------------------------=== *)
-  let plugin_properties_and_generators = apply_plugins loc type_descriptor plugin_names in
-  let match_cases = (
-    match description with
-    | (`Variant constructors | `PolymorphicVariant constructors) -> constructors
-    | (`Tuple _ | `Record _) as tuple_or_record -> [tuple_or_record]
-    )
-    |>
-    map (
-      function
-      | `Tuple elements as case ->
-          iter (add_derived_member case) plugin_properties_and_generators;
-          let args = mapi (fun i a -> sprintf "p%d" i) elements in
-          let pattern = H.P.tuple (map H.P.id args) in
-          push4 (generic_cata_match_case pattern vmethod args elements) []
+  let match_case_for = function
+    | `Record fields as case ->
+        let (field_names, _is_mutable, field_typs) = split3 fields in
+        let binded_names = map (fun name -> TransformerNames.generator#generate name) field_names in
+        let pattern = H.P.record (combine (map H.P.id field_names) (map H.P.id binded_names)) in
+        let match_case = generic_cata_match_case pattern vmethod binded_names field_typs in
+        let class_items = class_items_for_match_case_method vmethod field_typs in
+        unshift3 match_case class_items
 
-      | `Record fields as case ->
-          iter (add_derived_member case) plugin_properties_and_generators;
-          let names, _, types = split3 fields in
-          let args = map (fun a -> TransformerNames.generator#generate a) names in
-          let pattern = H.P.record (map (fun (n, a) -> H.P.id n, H.P.id a) (combine names args)) in
-          push4 (generic_cata_match_case pattern vmethod args types) []
+    | `Tuple element_typs as case ->
+        let binded_names = mapi (fun i _ -> sprintf "elem%d" i) element_typs in
+        let pattern = H.P.tuple (map H.P.id binded_names) in
+        let match_case = generic_cata_match_case pattern vmethod binded_names element_typs in
+        let class_items = class_items_for_match_case_method vmethod element_typs in
+        unshift3 match_case class_items
 
-      | `Constructor (cname, carg_typs) as constructor ->
-          iter (add_derived_member constructor) plugin_properties_and_generators;
-          let carg_names = mapi (fun i _ -> sprintf "arg%d" i) carg_typs in
-          let constructor_tag = (if is_polymorphic_variant then H.P.variant else H.P.id) cname in
-          let pattern = H.P.app (constructor_tag :: map H.P.id carg_names) in
-          let transformer_method_name = cmethod cname in
-          push4 (generic_cata_match_case pattern transformer_method_name carg_names carg_typs) []
+    | `Constructor (cname, carg_typs) as constructor ->
+        let binded_names = mapi (fun i _ -> sprintf "arg%d" i) carg_typs in
+        let constructor_tag = (if is_polymorphic_variant then H.P.variant else H.P.id) cname in
+        let pattern = H.P.app (constructor_tag :: map H.P.id binded_names) in
+        let match_case_method_name = cmethod cname in
+        let match_case = generic_cata_match_case pattern match_case_method_name binded_names carg_typs in
+        let class_items = class_items_for_match_case_method match_case_method_name carg_typs in
+        unshift3 match_case class_items
 
-      | `Type (Instance (_, args, qname)) as case ->
-          let args = map (function Variable (_, a) -> a | _ -> oops loc "unsupported case (non-variable in instance)") args in (* TODO *)
-          iter (add_derived_member case) plugin_properties_and_generators;
-          let targs =
-            flatten (map (fun a ->
-              [a; TransformerNames.inh_for a; TransformerNames.syn_for a]) args)
-            @ [TransformerNames.inh; TransformerNames.syn]
+    | `Type (Instance (_, args, qname)) as case ->
+        let args = map (function Variable (_, a) -> a | _ -> oops loc "unsupported case (non-variable in instance)") args in (* TODO *)
+        let targs =
+          flatten (map (fun a ->
+            [a; TransformerNames.inh_for a; TransformerNames.syn_for a]) args)
+          @ [TransformerNames.inh; TransformerNames.syn]
+        in
+        let targs = map H.T.var targs in
+        let ce    = <:class_expr< [ $list:targs$ ] $list:map_last loc class_t qname$ >> in
+        let ct f  =
+          let h, t = hdtl loc (map_last loc f qname) in
+          let ct   =
+            fold_left
+              (fun t id -> let id = <:class_type< $id:id$ >> in <:class_type< $t$ . $id$ >>)
+              <:class_type< $id:h$ >>
+            t
           in
-          let targs = map H.T.var targs in
-          let ce    = <:class_expr< [ $list:targs$ ] $list:map_last loc class_t qname$ >> in
-          let ct f  =
-            let h, t = hdtl loc (map_last loc f qname) in
-            let ct   =
-              fold_left
-                (fun t id -> let id = <:class_type< $id:id$ >> in <:class_type< $t$ . $id$ >>)
-                <:class_type< $id:h$ >>
-              t
-            in
-            <:class_type< $ct$ [ $list:targs$ ] >>
-          in
-          let expr =
-            H.E.app (
-              (generic_cata_for_qualified_name loc is_one_of_processed_mut_rec_types qname) ::
-              (map (fun a ->
-                H.E.id (CatamorphismNames.transform_for a))
-                args @ [H.E.id CatamorphismNames.transformer; H.E.id CatamorphismNames.initial_inh; H.E.id CatamorphismNames.subject])
-           )
-          in
-          (H.P.alias (H.P.type_p qname) (H.P.id CatamorphismNames.subject), VaVal None, expr),
-          [<:class_str_item< inherit $ce$ >>],
-          [<:class_sig_item< inherit $ct class_t$  >>],
-          [<:class_sig_item< inherit $ct class_tt$ >>],
-          [args, qname]
+          <:class_type< $ct$ [ $list:targs$ ] >>
+        in
+        let expr =
+          H.E.app (
+            (generic_cata_for_qualified_name loc is_one_of_processed_mut_rec_types qname) ::
+            (map (fun a ->
+              H.E.id (CatamorphismNames.transform_for a))
+              args @ [H.E.id CatamorphismNames.transformer; H.E.id CatamorphismNames.initial_inh; H.E.id CatamorphismNames.subject])
+         )
+        in
+        (H.P.alias (H.P.type_p qname) (H.P.id CatamorphismNames.subject), expr),
+        [<:class_str_item< inherit $ce$ >>],
+        [<:class_sig_item< inherit $ct class_t$  >>],
+        [<:class_sig_item< inherit $ct class_tt$ >>]
 
-      | _ -> oops loc "unsupported case (internal error)"
-    )
+    | _ -> oops loc "unsupported type case description (internal error in match_case_for function)"
   in
+  let base_types_for = function
+    | `Type (Instance (_, type_args, qualified_name)) -> [type_args, qualified_name]
+    | `Record _ | `Tuple _ | `Constructor _ -> []
+    | _ -> oops loc "unsupported type case description (internal error in base_types_for function)"
+  in
+(* ===--------------------------------------------------------------------=== *)
+  let case_descriptions = type_case_descriptions description in
+  let plugin_properties_and_generators = apply_plugins loc type_descriptor plugin_names in
+  iter (fun case -> iter (add_derived_member case) plugin_properties_and_generators) case_descriptions;
+  let match_cases = map match_case_for case_descriptions in
+  let base_types = map base_types_for case_descriptions in
+  let cases, methods, methods_sig, methods_sig_t = split4 match_cases in
+(* ===--------------------------------------------------------------------=== *)
   let cata_metarg_names =
     (map CatamorphismNames.transform_for type_parameters) @ [CatamorphismNames.transformer]
   in
@@ -746,7 +774,6 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
     | [] -> expr
     | _  -> H.E.letrec local_defs expr
   in
-  let cases, methods, methods_sig, methods_sig_t, base_types = split5 match_cases in
   let base_types = flatten base_types in
   let is_abbrev = not is_polymorphic_variant && length base_types = 1 in
   let methods = flatten methods in
@@ -784,8 +811,12 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
   let class_decl = <:sig_item< class $list: [class_info ~is_virtual:true (class_t type_name) class_type]$ >> in
   let body =
     if is_abbrev
-    then let (_, _, expr), _ = hdtl loc cases in expr
-    else local_defs_and_then (H.E.match_e subject cases)
+    then
+      let ((_, expr), _) = hdtl loc cases in
+      expr
+    else
+      let when_guard_expr = VaVal None in
+      local_defs_and_then (H.E.match_e subject (map (insert2_2 when_guard_expr) cases))
   in
   (H.P.constr (H.P.id type_name) gt_record_ctyp, H.E.record [generic_cata, H.E.id (cata type_name)]),
   (H.P.id (cata type_name), (H.E.func (map H.P.id cata_arg_names) body)),
