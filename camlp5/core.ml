@@ -58,6 +58,7 @@ let apply_to2 arg1 arg2 func = func arg1 arg2
 let map2 func (e1, e2) = (func e1, func e2)
 
 let snd3 (_, e2, _) = e2
+let get3_3 (_, _, e3) = e3
 let push4 (e1, e2, e3, e4) e = (e1, e2, e3, e4, e)
 let insert2_2 e (e1, e2) = (e1, e, e2)
 let unshift3 e (e1, e2, e3) = (e, e1, e2, e3)
@@ -687,31 +688,13 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
       [<:class_sig_item< method $lid: method_name$ : $method_ctyp$ >>] )
   in
 (* ===--------------------------------------------------------------------=== *)
-  let match_case_for = function
-    | `Record fields as case ->
-        let (field_names, _is_mutable, field_typs) = split3 fields in
-        let binded_names = map (fun name -> TransformerNames.generator#generate name) field_names in
-        let pattern = H.P.record (combine (map H.P.id field_names) (map H.P.id binded_names)) in
-        let match_case = generic_cata_match_case pattern vmethod binded_names field_typs in
-        let class_items = class_items_for_match_case_method vmethod field_typs in
-        unshift3 match_case class_items
-
-    | `Tuple element_typs as case ->
-        let binded_names = mapi (fun i _ -> sprintf "elem%d" i) element_typs in
-        let pattern = H.P.tuple (map H.P.id binded_names) in
-        let match_case = generic_cata_match_case pattern vmethod binded_names element_typs in
-        let class_items = class_items_for_match_case_method vmethod element_typs in
-        unshift3 match_case class_items
-
-    | `Constructor (cname, carg_typs) as constructor ->
-        let binded_names = mapi (fun i _ -> sprintf "arg%d" i) carg_typs in
-        let constructor_tag = (if is_polymorphic_variant then H.P.variant else H.P.id) cname in
-        let pattern = H.P.app (constructor_tag :: map H.P.id binded_names) in
-        let match_case_method_name = cmethod cname in
-        let match_case = generic_cata_match_case pattern match_case_method_name binded_names carg_typs in
-        let class_items = class_items_for_match_case_method match_case_method_name carg_typs in
-        unshift3 match_case class_items
-
+  let class_items_for = function
+    | `Record fields ->
+        class_items_for_match_case_method vmethod (map get3_3 fields)
+    | `Tuple element_typs ->
+        class_items_for_match_case_method vmethod element_typs
+    | `Constructor (cname, carg_typs) ->
+        class_items_for_match_case_method (cmethod cname) carg_typs
     | `Type (Instance (_, args, qname)) as case ->
         let args = map (function Variable (_, a) -> a | _ -> oops loc "unsupported case (non-variable in instance)") args in (* TODO *)
         let targs =
@@ -731,21 +714,46 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
           in
           <:class_type< $ct$ [ $list:targs$ ] >>
         in
-        let expr =
-          H.E.app (
-            (generic_cata_for_qualified_name loc is_one_of_processed_mut_rec_types qname) ::
-            (map (fun a ->
-              H.E.id (CatamorphismNames.transform_for a))
-              args @ [H.E.id CatamorphismNames.transformer; H.E.id CatamorphismNames.initial_inh; H.E.id CatamorphismNames.subject])
-         )
-        in
-        (H.P.alias (H.P.type_p qname) (H.P.id CatamorphismNames.subject), expr),
         [<:class_str_item< inherit $ce$ >>],
         [<:class_sig_item< inherit $ct class_t$  >>],
         [<:class_sig_item< inherit $ct class_tt$ >>]
+    | _ -> oops loc "unsupported type case description (internal error in match_case_for function)"
+  in
+
+  let match_case_for = function
+    | `Record fields as case ->
+        let (field_names, _is_mutable, field_typs) = split3 fields in
+        let binded_names = map (fun name -> TransformerNames.generator#generate name) field_names in
+        let pattern = H.P.record (combine (map H.P.id field_names) (map H.P.id binded_names)) in
+        generic_cata_match_case pattern vmethod binded_names field_typs
+
+    | `Tuple element_typs as case ->
+        let binded_names = mapi (fun i _ -> sprintf "elem%d" i) element_typs in
+        let pattern = H.P.tuple (map H.P.id binded_names) in
+        generic_cata_match_case pattern vmethod binded_names element_typs
+
+    | `Constructor (cname, carg_typs) as constructor ->
+        let binded_names = mapi (fun i _ -> sprintf "arg%d" i) carg_typs in
+        let constructor_tag = (if is_polymorphic_variant then H.P.variant else H.P.id) cname in
+        let pattern = H.P.app (constructor_tag :: map H.P.id binded_names) in
+        let match_case_method_name = cmethod cname in
+        generic_cata_match_case pattern match_case_method_name binded_names carg_typs
+
+    | `Type (Instance (_, args, qname)) as case ->
+        let args = map (function Variable (_, a) -> a | _ -> oops loc "unsupported case (non-variable in instance)") args in (* TODO *)
+        let expr =
+          H.E.app (
+            (generic_cata_for_qualified_name loc is_one_of_processed_mut_rec_types qname)
+            :: ((map (fun a -> H.E.id (CatamorphismNames.transform_for a)) args)
+                @ [H.E.id CatamorphismNames.transformer;
+                   H.E.id CatamorphismNames.initial_inh;
+                   H.E.id CatamorphismNames.subject]))
+        in
+        (H.P.alias (H.P.type_p qname) (H.P.id CatamorphismNames.subject), expr)
 
     | _ -> oops loc "unsupported type case description (internal error in match_case_for function)"
   in
+
   let base_types_for = function
     | `Type (Instance (_, type_args, qualified_name)) -> [type_args, qualified_name]
     | `Record _ | `Tuple _ | `Constructor _ -> []
@@ -754,10 +762,13 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
 (* ===--------------------------------------------------------------------=== *)
   let case_descriptions = type_case_descriptions description in
   let plugin_properties_and_generators = apply_plugins loc type_descriptor plugin_names in
-  iter (fun case -> iter (add_derived_member case) plugin_properties_and_generators) case_descriptions;
+  case_descriptions
+  |> iter (fun case ->
+      iter (add_derived_member case)
+        plugin_properties_and_generators);
   let match_cases = map match_case_for case_descriptions in
   let base_types = map base_types_for case_descriptions in
-  let cases, methods, methods_sig, methods_sig_t = split4 match_cases in
+  let (methods, methods_sig, methods_sig_t) = split3 (map class_items_for case_descriptions) in
 (* ===--------------------------------------------------------------------=== *)
   let cata_metarg_names =
     (map CatamorphismNames.transform_for type_parameters) @ [CatamorphismNames.transformer]
@@ -812,11 +823,11 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
   let body =
     if is_abbrev
     then
-      let ((_, expr), _) = hdtl loc cases in
+      let ((_, expr), _) = hdtl loc match_cases in
       expr
     else
       let when_guard_expr = VaVal None in
-      local_defs_and_then (H.E.match_e subject (map (insert2_2 when_guard_expr) cases))
+      local_defs_and_then (H.E.match_e subject (map (insert2_2 when_guard_expr) match_cases))
   in
   (H.P.constr (H.P.id type_name) gt_record_ctyp, H.E.record [generic_cata, H.E.id (cata type_name)]),
   (H.P.id (cata type_name), (H.E.func (map H.P.id cata_arg_names) body)),
