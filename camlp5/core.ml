@@ -568,8 +568,7 @@ type context = {
 let get_plugin_classes_generator loc
                                  names
                                  descrs
-                                 type_descriptor
-                                 type_name =
+                                 type_descriptor =
   let module H = Plugin.Helper (struct let loc = loc end) in
   let m = ref StringMap.empty in
   let obj_magic = <:expr< Obj.magic >> in
@@ -581,11 +580,11 @@ let get_plugin_classes_generator loc
         let this = g#generate "this" in
         let env = g#generate "env"  in
         let self = g#generate "self" in
-        let cn = g#generate ("c_" ^ type_name) in
+        let cn = g#generate ("c_" ^ type_descriptor.name) in
         let vals, inits, methods, env_methods = split4 (
           map
             (fun (t, (args, _, _)) ->
-              let ct      = if type_name = t then cn else g#generate ("c_" ^ t) in
+              let ct      = if type_descriptor.name = t then cn else g#generate ("c_" ^ t) in
               let proto_t = trait_proto_t t trait in
               let mt      = tmethod t             in
               let args          = map g#generate args in
@@ -617,12 +616,12 @@ let get_plugin_classes_generator loc
               <:class_str_item< method $mt$ : $mtype$ = $H.E.method_selection (H.E.id ct) mt$ >>,
               <:class_sig_item< method $tmethod t$ : $mtype$ >>
             )
-            (remove_assoc type_name descrs)
+            (remove_assoc type_descriptor.name descrs)
          )
         in
         let items =
           let prop, _ = (from_option_with_error loc (Plugin.get trait)) loc type_descriptor in
-          let this    = H.E.coerce (H.E.id this) (H.T.app (H.T.id (trait_t type_name trait)::map H.T.var prop.Plugin.transformer_parameters)) in
+          let this    = H.E.coerce (H.E.id this) (H.T.app (H.T.id (trait_t type_descriptor.name trait)::map H.T.var prop.Plugin.transformer_parameters)) in
           vals @ [<:class_str_item< initializer $H.E.seq (H.E.app [H.E.lid ":="; H.E.id self; this]::inits)$ >>] @ methods
         in
         {gen         = g;
@@ -641,7 +640,7 @@ let get_plugin_classes_generator loc
   end
 
 
-let add_derived_member loc plugin_classes_generator is_one_of_processed_mut_rec_types is_polymorphic_variant type_name =
+let add_derived_member loc plugin_classes_generator is_one_of_processed_mut_rec_types type_descriptor =
   let module H = Plugin.Helper (struct let loc = loc end) in
   (fun case (trait, (prop, generator)) ->
     let p       = from_option_with_error loc (Plugin.get trait) in
@@ -661,12 +660,12 @@ let add_derived_member loc plugin_classes_generator is_one_of_processed_mut_rec_
                | Instance (_, args, qname) ->
                    let args = map inner args in
                    (match qname with
-                    | [t] when is_one_of_processed_mut_rec_types t && t <> type_name ->
+                    | [t] when is_one_of_processed_mut_rec_types t && t <> type_descriptor.name ->
                         H.E.app ((H.E.method_selection (H.E.app [H.E.lid "!"; H.E.id context.env]) (tmethod t)) :: args)
                     | _  ->
                         let tobj =
                           match qname with
-                          | [t] when t = type_name -> H.E.id "this"
+                          | [t] when t = type_descriptor.name -> H.E.id "this"
                           | _ -> H.E.new_e (map_last loc (fun name -> trait_t name trait) qname)
                         in
                         H.E.app ([H.E.acc (map H.E.id ["GT"; "transform"]); H.E.acc (map H.E.id qname)] @ args @ [tobj])
@@ -707,8 +706,7 @@ let add_derived_member loc plugin_classes_generator is_one_of_processed_mut_rec_
             rev ((env_tt n trait) :: t),
             n
           in
-          let type_descriptor = {
-            is_polymorphic_variant = is_polymorphic_variant;
+          let type_descriptor = { type_descriptor with
             parameters = args;
             name = name;
             default_properties = prop;
@@ -730,15 +728,15 @@ let add_derived_member loc plugin_classes_generator is_one_of_processed_mut_rec_
   )
 
 
-let get_derived_classes loc plugin_classes_generator type_name type_descriptor =
+let get_derived_classes loc plugin_classes_generator type_descriptor =
   let module H = Plugin.Helper (struct let loc = loc end) in
   let obj_magic = <:expr< Obj.magic >> in
   (fun (trait, p) ->
      let context = plugin_classes_generator#get trait in
-     let i_def, _ = Plugin.generate_inherit true  loc [class_t  type_name] None type_descriptor (fst p) in
-     let _ , i_decl = Plugin.generate_inherit true  loc [class_tt type_name] None type_descriptor (fst p) in
+     let i_def, _ = Plugin.generate_inherit true  loc [class_t type_descriptor.name] None type_descriptor (fst p) in
+     let _ , i_decl = Plugin.generate_inherit true  loc [class_tt type_descriptor.name] None type_descriptor (fst p) in
      let p_def, _ =
-       Plugin.generate_inherit false loc [trait_proto_t type_name trait] (Some (H.E.id context.self, H.T.id "unit")) type_descriptor (fst p)
+       Plugin.generate_inherit false loc [trait_proto_t type_descriptor.name trait] (Some (H.E.id context.self, H.T.id "unit")) type_descriptor (fst p)
      in
      let cproto = <:class_expr< object ($H.P.id context.this$) $list:i_def::context.proto_items$ end >> in
      let ce =
@@ -748,13 +746,13 @@ let get_derived_classes loc plugin_classes_generator type_name type_descriptor =
      let env_t = <:class_type< object $list:context.env_sig$ end >> in
      let class_targs = map H.T.var (fst p).transformer_parameters in
      let cproto_t =
-       <:class_type< [ $H.T.app [H.T.id "ref"; H.T.app (H.T.id (env_tt type_name trait) :: class_targs)]$ ] -> object $list:[i_decl]$ end >>
+       <:class_type< [ $H.T.app [H.T.id "ref"; H.T.app (H.T.id (env_tt type_descriptor.name trait) :: class_targs)]$ ] -> object $list:[i_decl]$ end >>
      in
      let ct =
        let ct =
          match class_targs with
-         | [] -> <:class_type< $id:env_tt type_name trait$ >>
-         | _  -> <:class_type< $id:env_tt type_name trait$ [ $list:class_targs$ ] >>
+         | [] -> <:class_type< $id:env_tt type_descriptor.name trait$ >>
+         | _  -> <:class_type< $id:env_tt type_descriptor.name trait$ [ $list:class_targs$ ] >>
        in
        let env_inh = <:class_sig_item< inherit $ct$ >> in
        <:class_type< object $list:[i_decl; env_inh]$ end >>
@@ -825,14 +823,7 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
     <:class_sig_item< method $lid: tmethod type_name$ : $catamorphism_curried_by_transformer$ >>
   in
   let is_one_of_processed_mut_rec_types type_name = mem_assoc type_name descrs in
-(* ===--------------------------------------------------------------------=== *)
-  let plugin_classes_generator =
-    get_plugin_classes_generator loc
-                                 names
-                                 descrs
-                                 type_descriptor
-                                 type_name
-  in
+  let plugin_classes_generator = get_plugin_classes_generator loc names descrs type_descriptor in
 (* ===--------------------------------------------------------------------=== *)
   let case_descriptions = type_case_descriptions description in
   let plugin_properties_and_generators = apply_plugins loc type_descriptor plugin_names in
@@ -840,8 +831,7 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
     iter (add_derived_member loc
                              plugin_classes_generator
                              is_one_of_processed_mut_rec_types
-                             is_polymorphic_variant
-                             type_name
+                             type_descriptor
                              case)
       plugin_properties_and_generators)
     case_descriptions;
@@ -934,7 +924,6 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
   (type_class_def, type_class_decl),
   (let env, protos, defs, edecls, pdecls, decls = split6 (map (get_derived_classes loc
                                                                                    plugin_classes_generator
-                                                                                   type_name
                                                                                    type_descriptor)
                                                                                    plugin_properties_and_generators)
    in
