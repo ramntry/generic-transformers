@@ -54,6 +54,10 @@ let split6 list_of_tuples =
   List.fold_right (fun (a, b, c, d, e, f) (x, y, z, u, v, w) ->
     (a :: x, b :: y, c :: z, d :: u, e :: v, f :: w)) list_of_tuples ([], [], [], [], [], [])
 
+let split7 list_of_tuples =
+  List.fold_right (fun (a, b, c, d, e, f, g) (x, y, z, u, v, w, t) ->
+    (a :: x, b :: y, c :: z, d :: u, e :: v, f :: w, g :: t)) list_of_tuples ([], [], [], [], [], [], [])
+
 let apply_to2 arg1 arg2 func = func arg1 arg2
 let map2 func (e1, e2) = (func e1, func e2)
 
@@ -603,6 +607,17 @@ let metaclass loc type_name type_parameters case_descriptions =
   <:str_item< class type $list: [class_info loc ~is_virtual:false name parameters definition]$ >>
 
 
+let transformer_class loc transformer_names type_name =
+  let name = class_tt type_name ^ "_meta_derived" in
+  let metaclass_parameters = [] in
+  let metaclass_ident = <:class_type< $id: Names.metaclass#name type_name$ >> in
+  let metaclass_instance =
+    <:class_type< $metaclass_ident$ [ $list: metaclass_parameters$ ] >>
+  in
+  let inheritance = <:class_sig_item< inherit $metaclass_instance$ >> in
+  let definition = <:class_type< object $list: [inheritance]$ end >> in
+  <:str_item< class type $list: [class_info loc ~is_virtual:false name transformer_names#parameters definition]$ >>
+
 
 let class_items loc
                 properties
@@ -1015,6 +1030,7 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
     class_info loc ~is_virtual:true class_name names.Names.transformer#parameters class_definition
   in
   let metaclass_decl = metaclass loc type_name type_parameters case_descriptions in
+  let transformer_class_decl = transformer_class loc names.Names.transformer type_name in
   let class_type_def = <:str_item< class type $list: [transformer_class_info (class_tt type_name) proto_class_type]$ >> in
   let class_type_decl = <:sig_item< class type $list: [transformer_class_info (class_tt type_name) proto_class_type]$ >> in
   let class_def  = <:str_item< class $list: [transformer_class_info (class_t type_name) class_expr]$ >> in
@@ -1053,6 +1069,7 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
       )
     end
   , metaclass_decl
+  , transformer_class_decl
   )
 
 
@@ -1102,7 +1119,7 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
     |> map (fun (type_name, (type_parameters, description, plugin_names)) ->
         generate_definitions_for_single_type loc descrs type_name type_parameters description plugin_names)
   in
-  let names, defs, decls, classes, derived_classes, metaclasses = split6 per_mut_rec_type_definitions in
+  let names, defs, decls, classes, derived_classes, metaclasses, transformer_classes = split7 per_mut_rec_type_definitions in
   let pnames, tnames = split names in
   let class_defs, class_decls = split classes in
   let derived_class_defs, derived_class_decls =
@@ -1113,5 +1130,5 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
   let open_polymorphic_variant_types = flatten (map (open_polymorphic_variant_type loc) type_decls) in
   let type_def = <:str_item< type $list: type_decls @ open_polymorphic_variant_types$ >> in
   let type_decl = <:sig_item< type $list: type_decls @ open_polymorphic_variant_types$ >> in
-  <:str_item< declare $list: type_def :: class_defs @ [cata_def] @ metaclasses @ derived_class_defs$ end >>,
+  <:str_item< declare $list: type_def :: class_defs @ [cata_def] @ metaclasses @ transformer_classes @ derived_class_defs$ end >>,
   <:sig_item< declare $list: type_decl :: class_decls @ decls @ derived_class_decls$ end >>
