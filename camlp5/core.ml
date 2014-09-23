@@ -350,6 +350,7 @@ module Names = struct
    *)
   class meta_class =
     object
+      method name type_name = type_name ^ "_meta_class"
       method parameter_arg parameter = parameter ^ "_arg"
       method inh = "inh"
       method type_instance = "type_instance"
@@ -452,25 +453,25 @@ let match_case_for loc names plugin_names is_one_of_processed_mut_rec_types is_p
   let module H = Plugin.Helper (struct let loc = loc end) in
   let cata_match_case = generic_cata_match_case loc names plugin_names in
   match case_description with
-  | `Record fields as case ->
+  | `Record fields ->
       let (field_names, _is_mutable, field_typs) = split3 fields in
       let binded_names = map (fun name -> names.Names.transformer#generator#generate name) field_names in
       let pattern = H.P.record (combine (map H.P.id field_names) (map H.P.id binded_names)) in
       cata_match_case pattern vmethod binded_names field_typs
 
-  | `Tuple element_typs as case ->
+  | `Tuple element_typs ->
       let binded_names = mapi (fun i _ -> sprintf "elem%d" i) element_typs in
       let pattern = H.P.tuple (map H.P.id binded_names) in
       cata_match_case pattern vmethod binded_names element_typs
 
-  | `Constructor (cname, carg_typs) as constructor ->
+  | `Constructor (cname, carg_typs) ->
       let binded_names = mapi (fun i _ -> sprintf "arg%d" i) carg_typs in
       let constructor_tag = (if is_polymorphic_variant then H.P.variant else H.P.id) cname in
       let pattern = H.P.app (constructor_tag :: map H.P.id binded_names) in
       let match_case_method_name = cmethod cname in
       cata_match_case pattern match_case_method_name binded_names carg_typs
 
-  | `Type (Instance (_, args, qname)) as case ->
+  | `Type (Instance (_, args, qname)) ->
       let args = map (function Variable (_, a) -> a | _ -> oops loc "unsupported case (non-variable in instance)") args in (* TODO *)
       let expr =
         H.E.app (
@@ -528,10 +529,10 @@ let method_name_of_case_description loc = function
 
 
 let meta_class_methods loc
+                       meta_class_names
                        type_parameters (*TODO: For some assertions only! Maybe need to be removed.*)
                        case_descriptions =
   let module H = Plugin.Helper (struct let loc = loc end) in
-  let meta_class_names = new Names.meta_class in
   let self_arg =
     H.T.app (
       <:ctyp< GT.a >> ::
@@ -591,13 +592,14 @@ let class_info loc ~is_virtual class_name class_parameters class_definition = {
     ciExp = class_definition;
   }
 
-let meta_class loc meta_class_names case_descriptions =
-  let name = meta_class_names#name in
+let meta_class loc type_name type_parameters case_descriptions =
+  let meta_class_names = new Names.meta_class in
+  let name = meta_class_names#name type_name in
   let definition =
-    <:class_type< object $list: meta_class_methods loc meta_class_names case_descriptions$ end >>
+    <:class_type< object $list: meta_class_methods loc meta_class_names type_parameters case_descriptions$ end >>
   in
   let parameters = [] in
-  <:str_item< class type $list: [class_info loc ~is_virtual:false name parameters proto_class_type]$ >>
+  <:str_item< class type $list: [class_info loc ~is_virtual:false name parameters definition]$ >>
 
 let class_items loc
                 properties
@@ -620,7 +622,7 @@ let class_items loc
   | `Constructor (cname, carg_typs) ->
       class_items_for_match_case_method carg_typs (cmethod cname)
 
-  | `Type (Instance (_, args, qname)) as case ->
+  | `Type (Instance (_, args, qname)) ->
       let args = map (function Variable (_, a) -> a | _ -> oops loc "unsupported case (non-variable in instance)") args in (* TODO *)
       let targs =
         flatten (map (fun a ->
