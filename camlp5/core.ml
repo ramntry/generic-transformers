@@ -345,6 +345,17 @@ module Names = struct
       method self = self
     end
 
+  (* TODO: Maybe useless class and need to be removed *)
+  (** Generate names for metaclass.
+   *)
+  class meta_class =
+    object
+      method parameter_arg parameter = parameter ^ "_arg"
+      method inh = "inh"
+      method type_instance = "type_instance"
+      method syn = "syn"
+      method parameter_transforms_obj = "parameter_transforms_obj"
+    end
 
   (** Generate names of generic catamorphism's actual arguments.
    *)
@@ -486,11 +497,11 @@ let class_items_for_match_case_method_gen loc
   in
   let self_arg = augmented_arg properties.inh_t type_instance_ctyp properties.syn_t in
   let rec arg_ctyp_of_typ = function
-  | Arbitrary ctyp | Instance (ctyp, _, _) -> ctyp
-  | Tuple (_ctyp, typs) -> H.T.tuple (map arg_ctyp_of_typ typs)
-  | Self (_ctyp, _, _) -> self_arg
-  | Variable (ctyp, type_var) ->
-      augmented_arg (properties.inh_t_of_parameter type_var) ctyp (properties.syn_t_of_parameter type_var)
+    | Arbitrary ctyp | Instance (ctyp, _, _) -> ctyp
+    | Tuple (_ctyp, typs) -> H.T.tuple (map arg_ctyp_of_typ typs)
+    | Self (_ctyp, _, _) -> self_arg
+    | Variable (ctyp, type_var) ->
+        augmented_arg (properties.inh_t_of_parameter type_var) ctyp (properties.syn_t_of_parameter type_var)
   in
   let method_ctyp =
     H.T.arrow ([properties.inh_t; self_arg] @ (map arg_ctyp_of_typ arg_typs) @ [properties.syn_t])
@@ -499,6 +510,94 @@ let class_items_for_match_case_method_gen loc
     <:class_sig_item< method virtual $lid: method_name$ : $method_ctyp$ >>,
     <:class_sig_item< method $lid: method_name$ : $method_ctyp$ >> )
 
+
+
+(** Returns list of type case argument types. Type case arguments are variant arguments in case of variant type,
+ *  tuple elemements in case of tuple, field values in case of record and so on.
+ *)
+let arg_typs_of_case_description loc = function
+  | `Record fields -> map get3_3 fields
+  | `Tuple element_typs -> element_typs
+  | `Constructor (_, carg_typs) -> carg_typs
+  | `Type _ -> oops loc "arg_typs_of_case_description: metaclasses for type instances are not supported now"
+
+let method_name_of_case_description loc = function
+  | `Record _ | `Tuple _ -> vmethod
+  | `Constructor (cname, _) -> cmethod cname
+  | `Type _ -> oops loc "method_name_of_case_description: metaclasses for type instances are not supported now"
+
+
+let meta_class_methods loc
+                       type_parameters (*TODO: For some assertions only! Maybe need to be removed.*)
+                       case_descriptions =
+  let module H = Plugin.Helper (struct let loc = loc end) in
+  let meta_class_names = new Names.meta_class in
+  let self_arg =
+    H.T.app (
+      <:ctyp< GT.a >> ::
+      map H.T.var [
+        meta_class_names#inh;
+        meta_class_names#type_instance;
+        meta_class_names#syn;
+        meta_class_names#parameter_transforms_obj])
+  in
+  (** Returns ctyp of meta class method actual argument that corresponds to some variant constructor argument or tuple
+   *  element etc. *)
+  let rec arg_ctyp_of_typ = function
+    | Variable (_, type_var) ->
+        (* If the argument type is one of the type parameters, actual argument type of meta class method
+         * should be abstracted out by corresponding meta class parameter: parameter_arg.
+         * This is so sad because actual type of transformation object method arguments, which class type
+         * is should be derived from the meta class, depends on whether the type parameter was fixed by
+         * instantiation or not. In first case actual argument type should be equal to type of corresponding
+         * constructor argument (or tuple element or something), in second case it should be augmented.
+         * So, we have to defer the decision.
+         *)
+        assert (mem type_var type_parameters);
+        H.T.var (meta_class_names#parameter_arg type_var)
+    | Tuple (_, typs) ->
+        (* TODO: Probably incosistent behaviour here: for some constructor arguments (or tuple elements or something)
+         * we do deep pattern matching, in current case, if the argument is a tuple. But for arguments of other types
+         * we don't and can't do such thing in general case. So, for what we do it for tuples? Maybe because there is no
+         * big difference between variant constructor with many arguments and a variant constructor with one
+         * tuple argument wraping all that arguments together, especially if we deel with polymorphic variant type.
+         * Or maybe it is just a mess.
+         *)
+        H.T.tuple (map arg_ctyp_of_typ typs)
+    | Self (_ , _, _) -> self_arg
+    | Arbitrary ctyp | Instance (ctyp, _, _) -> ctyp
+  in
+  let method_sig arg_typs
+                 method_name =
+    let method_ctyp =
+      H.T.arrow (H.T.var meta_class_names#inh ::
+                 self_arg ::
+                 map arg_ctyp_of_typ arg_typs @
+                 [H.T.var meta_class_names#syn])
+    in
+    <:class_sig_item< method $lid: method_name$ : $method_ctyp$ >>
+  in
+  case_descriptions
+  |> map (fun case ->
+      method_sig (arg_typs_of_case_description loc case)
+                 (method_name_of_case_description loc case))
+
+
+let class_info loc ~is_virtual class_name class_parameters class_definition = {
+    ciLoc = loc;
+    ciVir = Ploc.VaVal is_virtual;
+    ciPrm = (loc, Ploc.VaVal (class_parameters |> map (fun p -> Ploc.VaVal (Some p), None)));
+    ciNam = Ploc.VaVal class_name;
+    ciExp = class_definition;
+  }
+
+let meta_class loc meta_class_names case_descriptions =
+  let name = meta_class_names#name in
+  let definition =
+    <:class_type< object $list: meta_class_methods loc meta_class_names case_descriptions$ end >>
+  in
+  let parameters = [] in
+  <:str_item< class type $list: [class_info loc ~is_virtual:false name parameters proto_class_type]$ >>
 
 let class_items loc
                 properties
@@ -907,13 +1006,8 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
     <:class_expr< object ($H.P.id this$) $list:methods@[met]$ end >>
   in
   let class_type = <:class_type< object $list: methods_sig @ [method_sig_for_catamorphism]$ end >> in
-  let class_info ~is_virtual class_name class_definition = {
-    ciLoc = loc;
-    ciVir = Ploc.VaVal is_virtual;
-    ciPrm = (loc, Ploc.VaVal (map (fun p -> Ploc.VaVal (Some p), None) names.Names.transformer#parameters));
-    ciNam = Ploc.VaVal class_name;
-    ciExp = class_definition;
-  }
+  let transformer_class_info class_name class_definition =
+    class_info loc ~is_virtual:true class_name names.Names.transformer#parameters class_definition
   in
   (*
     let meta_class_def  = ... meta_class_type
@@ -921,10 +1015,10 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
 
   *)
   let generic_cata = <:patt< GT.gcata >> in
-  let type_class_def  = <:str_item< class type $list: [class_info ~is_virtual:true (class_tt type_name) proto_class_type]$ >> in
-  let type_class_decl = <:sig_item< class type $list: [class_info ~is_virtual:true (class_tt type_name) proto_class_type]$ >> in
-  let class_def  = <:str_item< class $list: [class_info ~is_virtual:true (class_t type_name) class_expr]$ >> in
-  let class_decl = <:sig_item< class $list: [class_info ~is_virtual:true (class_t type_name) class_type]$ >> in
+  let type_class_def  = <:str_item< class type $list: [transformer_class_info (class_tt type_name) proto_class_type]$ >> in
+  let type_class_decl = <:sig_item< class type $list: [transformer_class_info (class_tt type_name) proto_class_type]$ >> in
+  let class_def  = <:str_item< class $list: [transformer_class_info (class_t type_name) class_expr]$ >> in
+  let class_decl = <:sig_item< class $list: [transformer_class_info (class_t type_name) class_type]$ >> in
   let body =
     if is_abbrev
     then
