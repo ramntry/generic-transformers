@@ -1014,14 +1014,9 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
   let transformer_class_info class_name class_definition =
     class_info loc ~is_virtual:true class_name names.Names.transformer#parameters class_definition
   in
-  (*
-    let metaclass_def  = ... metaclass_type
-    let metaclass_decl = ... metaclass_type
-
-  *)
-  let generic_cata = <:patt< GT.gcata >> in
-  let type_class_def  = <:str_item< class type $list: [transformer_class_info (class_tt type_name) proto_class_type]$ >> in
-  let type_class_decl = <:sig_item< class type $list: [transformer_class_info (class_tt type_name) proto_class_type]$ >> in
+  let metaclass_decl = metaclass loc type_name type_parameters case_descriptions in
+  let class_type_def = <:str_item< class type $list: [transformer_class_info (class_tt type_name) proto_class_type]$ >> in
+  let class_type_decl = <:sig_item< class type $list: [transformer_class_info (class_tt type_name) proto_class_type]$ >> in
   let class_def  = <:str_item< class $list: [transformer_class_info (class_t type_name) class_expr]$ >> in
   let class_decl = <:sig_item< class $list: [transformer_class_info (class_t type_name) class_type]$ >> in
   let body =
@@ -1033,16 +1028,29 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
       let when_guard_expr = VaVal None in
       local_defs_and_then (H.E.match_e subject (map (insert2_2 when_guard_expr) catamorphism_match_cases))
   in
-  (H.P.constr (H.P.id type_name) gt_record_ctyp, H.E.record [generic_cata, H.E.id (cata type_name)]),
-  (H.P.id (cata type_name), (H.E.func (map H.P.id cata_arg_names) body)),
-  <:sig_item< value $type_name$ : $gt_record_ctyp$ >>,
-  (type_class_def, type_class_decl),
-  (let env, protos, defs, edecls, pdecls, decls = split6 (map (get_derived_classes loc
-                                                                                   plugin_classes_generator
-                                                                                   type_descriptor)
-                                                                                   plugin_properties_and_generators)
-   in
-   class_def, (flatten env)@protos, defs, class_decl::(flatten edecls)@pdecls@decls)
+  ( ( H.P.constr (H.P.id type_name) gt_record_ctyp
+    , H.E.record [(<:patt< GT.gcata >>, H.E.id (cata type_name))]
+    )
+  , ( H.P.id (cata type_name)
+    , H.E.func (map H.P.id cata_arg_names) body
+    )
+  , <:sig_item< value $type_name$ : $gt_record_ctyp$ >>
+  , ( class_type_def
+    , class_type_decl
+    )
+  , let (env, protos, defs, edecls, pdecls, decls) =
+      plugin_properties_and_generators
+      |> map (get_derived_classes loc
+                                  plugin_classes_generator
+                                  type_descriptor)
+      |> split6
+    in
+    ( class_def
+    , flatten env @ protos
+    , defs
+    , class_decl :: flatten edecls @ pdecls @ decls
+    )
+  )
 
 
 (** Process by type_decl_to_description function type declarations only for which it have been requested by user.
