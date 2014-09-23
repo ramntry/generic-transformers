@@ -21,5 +21,3 @@ let _ =
   Printf.printf "%s\n" (GT.transform(c) (new @show[c]) () y);
   Printf.printf "%s\n" (GT.transform(c) (new show_c') () z);
   Printf.printf "%s\n" (GT.transform(c) (new show_c') () y)
-
-

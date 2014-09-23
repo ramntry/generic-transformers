@@ -1,6 +1,6 @@
 open GT
 
-@type 'l t = 
+@type 'l t =
     R 
   | W 
   | L  of string 

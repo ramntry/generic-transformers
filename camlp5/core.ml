@@ -600,7 +600,7 @@ let metaclass loc type_name type_parameters case_descriptions =
     in
     for_type_parameters @ Names.metaclass#augmented_arg_parameters
   in
-  <:sig_item< class type $list: [class_info loc ~is_virtual:false name parameters definition]$ >>
+  <:str_item< class type $list: [class_info loc ~is_virtual:false name parameters definition]$ >>
 
 
 
@@ -1014,7 +1014,7 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
   let transformer_class_info class_name class_definition =
     class_info loc ~is_virtual:true class_name names.Names.transformer#parameters class_definition
   in
-  let metaclass_decl = metaclass loc type_name type_parameters case_descriptions in
+(*TODO:  let metaclass_decl = metaclass loc type_name type_parameters case_descriptions in *)
   let class_type_def = <:str_item< class type $list: [transformer_class_info (class_tt type_name) proto_class_type]$ >> in
   let class_type_decl = <:sig_item< class type $list: [transformer_class_info (class_tt type_name) proto_class_type]$ >> in
   let class_def  = <:str_item< class $list: [transformer_class_info (class_t type_name) class_expr]$ >> in
@@ -1038,18 +1038,21 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
   , ( class_type_def
     , class_type_decl
     )
-  , let (env, protos, defs, edecls, pdecls, decls) =
-      plugin_properties_and_generators
-      |> map (get_derived_classes loc
-                                  plugin_classes_generator
-                                  type_descriptor)
-      |> split6
-    in
-    ( class_def
-    , flatten env @ protos
-    , defs
-    , class_decl :: flatten edecls @ pdecls @ decls
-    )
+  , begin
+      let (env, protos, defs, edecls, pdecls, decls) =
+        plugin_properties_and_generators
+        |> map (get_derived_classes loc
+                                    plugin_classes_generator
+                                    type_descriptor)
+        |> split6
+      in
+      ( class_def
+      , flatten env @ protos
+      , defs
+      , class_decl :: flatten edecls @ pdecls @ decls
+      )
+    end
+  , () (*TODO: metaclass_decl*)
   )
 
 
@@ -1099,7 +1102,8 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
     |> map (fun (type_name, (type_parameters, description, plugin_names)) ->
         generate_definitions_for_single_type loc descrs type_name type_parameters description plugin_names)
   in
-  let names, defs, decls, classes, derived_classes = split5 per_mut_rec_type_definitions in
+  let names, defs, decls, classes, derived_classes, metaclasses = split6 per_mut_rec_type_definitions in
+  let metaclasses = (*TODO*)[] in
   let pnames, tnames = split names in
   let class_defs, class_decls = split classes in
   let derived_class_defs, derived_class_decls =
@@ -1110,5 +1114,5 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
   let open_polymorphic_variant_types = flatten (map (open_polymorphic_variant_type loc) type_decls) in
   let type_def = <:str_item< type $list: type_decls @ open_polymorphic_variant_types$ >> in
   let type_decl = <:sig_item< type $list: type_decls @ open_polymorphic_variant_types$ >> in
-  <:str_item< declare $list: type_def :: class_defs @ [cata_def] @ derived_class_defs$ end >>,
+  <:str_item< declare $list: type_def :: class_defs @ [cata_def] @ metaclasses @ derived_class_defs$ end >>,
   <:sig_item< declare $list: type_decl :: class_decls @ decls @ derived_class_decls$ end >>
