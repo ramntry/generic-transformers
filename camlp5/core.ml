@@ -345,10 +345,9 @@ module Names = struct
       method self = self
     end
 
-  (* TODO: Maybe useless class and need to be removed *)
   (** Generate names for metaclass.
    *)
-  class metaclass =
+  let metaclass =
     object (self)
       method name type_name = type_name ^ "_metaclass"
       method parameter_arg parameter = parameter ^ "_arg"
@@ -545,11 +544,10 @@ let method_name_of_case_description loc = function
 
 
 let metaclass_method loc
-                      metaclass_names
-                      type_parameters (*TODO: For some assertions only! Maybe need to be removed.*)
-                      case_description =
+                     type_parameters (*TODO: For some assertions only! Maybe need to be removed.*)
+                     case_description =
   let module H = Plugin.Helper (struct let loc = loc end) in
-  let self_arg = H.T.app (<:ctyp< GT.a >> :: map H.T.var metaclass_names#augmented_arg_parameters) in
+  let self_arg = H.T.app (<:ctyp< GT.a >> :: map H.T.var Names.metaclass#augmented_arg_parameters) in
 
   (* Returns ctyp of metaclass method actual argument that corresponds to some variant constructor argument or tuple
    * element or something else.
@@ -565,7 +563,7 @@ let metaclass_method loc
          * So, we have to defer the decision.
          *)
         assert (mem type_var type_parameters);
-        H.T.var (metaclass_names#parameter_arg type_var)
+        H.T.var (Names.metaclass#parameter_arg type_var)
     | Tuple (_, typs) ->
         (* TODO: Probably incosistent behaviour here: for some constructor arguments (or tuple elements or something)
          * we do deep pattern matching, in current case, if the argument is a tuple. But for arguments of other types
@@ -581,27 +579,26 @@ let metaclass_method loc
   let arg_typs = arg_typs_of_case_description loc case_description in
   let arg_ctyps = map arg_ctyp_of_typ arg_typs in
   let ctyp = H.T.arrow
-    (H.T.var metaclass_names#inh :: self_arg :: arg_ctyps @ [H.T.var metaclass_names#syn])
+    (H.T.var Names.metaclass#inh :: self_arg :: arg_ctyps @ [H.T.var Names.metaclass#syn])
   in
   let name = method_name_of_case_description loc case_description in
   <:class_sig_item< method $lid: name$ : $ctyp$ >>
 
 
 let metaclass loc type_name type_parameters case_descriptions =
-  let metaclass_names = new Names.metaclass in
-  let name = metaclass_names#name type_name in
+  let name = Names.metaclass#name type_name in
   let methods =
     case_descriptions
-    |> map (metaclass_method loc metaclass_names type_parameters)
+    |> map (metaclass_method loc type_parameters)
   in
   let definition = <:class_type< object $list: methods$ end >> in
   let parameters =
     let for_type_parameters =
       type_parameters
-      |> map (fun p -> [p; metaclass_names#parameter_arg p])
+      |> map (fun p -> [p; Names.metaclass#parameter_arg p])
       |> flatten
     in
-    for_type_parameters @ metaclass_names#augmented_arg_parameters
+    for_type_parameters @ Names.metaclass#augmented_arg_parameters
   in
   <:sig_item< class type $list: [class_info loc ~is_virtual:false name parameters definition]$ >>
 
