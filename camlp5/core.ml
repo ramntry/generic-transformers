@@ -619,13 +619,15 @@ let transformer_class loc
   let transforms_obj_constraint =
     <:class_sig_item< type $transforms_obj_parameter$ = $parameter_transforms_obj_ctyp$ >>
   in
-  let augmented_arg inh arg_type syn =
-    H.T.app [<:ctyp< GT.a >>; inh; arg_type; syn; transforms_obj_parameter]
+  let augmented_arg parameter =
+    let (inh, syn) = transformer_names#attribute_parameters_of parameter in
+    H.T.app (<:ctyp< GT.a >> :: map H.T.var [inh; parameter; syn] @ [transforms_obj_parameter])
   in
   let metaclass_parameters =
     let for_type_parameters =
       transformer_names#type_parameters
-      |> map H.T.var
+      |> map (fun p -> [H.T.var p; augmented_arg p])
+      |> flatten
     in
     for_type_parameters @
     [ <:ctyp< ' $Names.metaclass#inh$ >>
