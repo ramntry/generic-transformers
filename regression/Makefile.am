@@ -1,7 +1,9 @@
 TESTS = test000 test001 test002 test003 test004 test006 test007\
 test009 test014 test015 test016\
 test017 test018 test019 test020 test021 test022 \
-test027 test028 test029 test030 test031 test102
+test027 test028 test029 test030 test031 test102\
+test103\
+test104
 
 
 # Problematic tests: 

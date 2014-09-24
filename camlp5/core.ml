@@ -464,7 +464,12 @@ let generic_cata_match_case loc names plugin_names pattern method_name arg_names
   (pattern, expr)
 
 
-let match_case_for loc names plugin_names is_one_of_processed_mut_rec_types is_polymorphic_variant case_description =
+let match_case_for loc
+                   names
+                   plugin_names
+                   is_one_of_processed_mut_rec_types
+                   is_polymorphic_variant
+                   case_description =
   let module H = Plugin.Helper (struct let loc = loc end) in
   let cata_match_case = generic_cata_match_case loc names plugin_names in
   match case_description with
@@ -486,12 +491,17 @@ let match_case_for loc names plugin_names is_one_of_processed_mut_rec_types is_p
       let match_case_method_name = cmethod cname in
       cata_match_case pattern match_case_method_name binded_names carg_typs
 
-  | `Type (Instance (_, args, qname)) ->
-      let args = map (function Variable (_, a) -> a | _ -> oops loc "unsupported case (non-variable in instance)") args in (* TODO *)
+  | `Type (Instance (_, parameter_typs, qname)) ->
+      let parameters : parameter list =
+        parameter_typs
+        |> map (function
+            | Variable (_, var_name) -> var_name
+            | _ -> oops loc "match_case_for: unsupported case (non-variable in instance)")
+      in (* TODO *)
       let expr =
         H.E.app (
           (generic_cata_for_qualified_name loc is_one_of_processed_mut_rec_types qname)
-          :: ((map (fun a -> H.E.id (names.Names.catamorphism#transform_for a)) args)
+          :: ((map (fun p -> H.E.id (names.Names.catamorphism#transform_for p)) parameters)
               @ [H.E.id names.Names.catamorphism#transformer;
                  H.E.id names.Names.catamorphism#initial_inh;
                  H.E.id names.Names.catamorphism#subject]))
@@ -691,7 +701,12 @@ let class_items loc
       class_items_for_match_case_method carg_typs (cmethod cname)
 
   | `Type (Instance (_, args, qname)) ->
-      let args = map (function Variable (_, a) -> a | _ -> oops loc "unsupported case (non-variable in instance)") args in (* TODO *)
+      let args =
+        args
+        |> map (function
+            | Variable (_, var_name) -> var_name
+            | _ -> oops loc "class_items: unsupported case (non-variable in instance)")
+      in (* TODO *)
       let targs =
         flatten (map (fun a ->
           [a; transformer_names#inh_for a; transformer_names#syn_for a]) args)
@@ -873,7 +888,12 @@ let add_derived_member loc plugin_classes_generator is_one_of_processed_mut_rec_
           branch (cmethod cname) (map fst args) (fun env -> generator#constructor env cname args)
 
       | `Type (Instance (_, args, qname)) ->
-          let args = map (function Variable (_, a) -> a | _ -> oops loc "unsupported case (non-variable in instance)") args in (* TODO *)
+          let args =
+            args
+            |> map (function
+                | Variable (_, var_name) -> var_name
+                | _ -> oops loc "context: unsupported case (non-variable in instance)")
+          in (* TODO *)
           let qname, qname_proto, env_tt, name =
             let n, t = hdtl loc (rev qname) in
             rev ((trait_t n trait) :: t),
