@@ -31,12 +31,12 @@ open MLast
 open Ploc
 open Plugin
 
-(** Simple utility functions, working with lists, tuples, and functions that are not available in
- *  the standard library.
+(* Simple utility functions, working with lists, tuples, and functions that are not available
+ * in the standard library.
  *
- *  Numeric suffix for names of these functions is the number of elements in a tuple or a number of
- *  arguments of functions with which they work. The return value can contain a different number of
- *  elements, or have a different arity.
+ * Numeric suffix for names of these functions is the number of elements in a tuple or a
+ * number of arguments of functions with which they work. The return value can contain a
+ * different number of elements, or have a different arity.
  *)
 let split3 list_of_tuples =
   List.fold_right (fun (a, b, c) (x, y, z) ->
@@ -91,8 +91,9 @@ let parameters_of_type_decl loc type_decl : parameter list =
       )
 
 
-(** Convert ctyp-expression in simplified and refined typ-expression, that contains information, needed by
- *  the framework in appropriate form. All original ctyp's preserved as first arguments of typ constructors.
+(* Convert ctyp-expression in simplified and refined typ-expression, that contains
+ * information, needed by the framework in appropriate form. All original ctyp's preserved as
+ * first arguments of typ constructors.
  *)
 let rec ctyp_to_typ_without_selfs ctyp : typ =
   match ctyp with
@@ -101,15 +102,16 @@ let rec ctyp_to_typ_without_selfs ctyp : typ =
   | (<:ctyp< $uid: module_or_type_name$ >> | <:ctyp< $lid: module_or_type_name$ >>) ->
       Instance (ctyp, [(* type arguments *)], [module_or_type_name])
 
-  (* Type application case. Type expression ('a, 'b) t (or t 'a 'b in revised syntax) is representing by Camlp5 with
+  (* Type application case. Type expression ('a, 'b) t (or t 'a 'b in revised syntax) is
+   * representing by Camlp5 with
    *     TyApp (
    *       TyApp (
    *         TyLid "t",
    *         TyQuo "a"),
    *       TyQuo "b")
-   *  (loc's (source location information, which is the first argument of every AST node) was omitted for clarity),
-   *  so, convertion should be recursive. If any of type arguments of application is Arbitrary (unsupported type),
-   *  the whole type expression is Arbitrary.
+   *  (loc's (source location information, which is the first argument of every AST node) was
+   *  omitted for clarity), so, convertion should be recursive. If any of type arguments of
+   *  application is Arbitrary (unsupported type), the whole type expression is Arbitrary.
    *)
   | <:ctyp< $type_constructor$ $type_arg$ >> -> (
       match (ctyp_to_typ_without_selfs type_constructor, ctyp_to_typ_without_selfs type_arg) with
@@ -128,8 +130,9 @@ let rec ctyp_to_typ_without_selfs ctyp : typ =
   | _ -> Arbitrary ctyp
 
 
-(** Check all type instances (type constructor applications) in typ-expression and find ones equal to
- *  current being processed type. Replace all of them with Self (see typ type defintion).
+(* Check all type instances (type constructor applications) in typ-expression and find ones
+ * equal to current being processed type. Replace all of them with Self (see typ type
+ * defintion).
  *)
 let rec find_selfs loc type_name type_parameters : typ -> typ = function
   | Instance (ctyp, type_args, qualified_name) as orig_typ when qualified_name = [type_name] ->
@@ -156,8 +159,9 @@ let ctyp_to_typ loc type_name type_parameters ctyp =
   |> ctyp_to_typ_without_selfs
   |> find_selfs loc type_name type_parameters
 
-(** Recognize top level structure of type declaration and label it appropriately with polymorphic variant tag.
- * Convert all internals of that type declaration to typ-expression. Extract type name and list of type parameters.
+(* Recognize top level structure of type declaration and label it appropriately with
+ * polymorphic variant tag.  Convert all internals of that type declaration to typ-expression.
+ * Extract type name and list of type parameters.
  *)
 let type_decl_to_description loc type_decl : (type_name * parameter list * [
       | `Variant of [> (* ! *)
@@ -245,8 +249,8 @@ let type_case_descriptions description =
   | (`Tuple _ | `Record _) as tuple_or_record -> [tuple_or_record]
 
 
-(** Get names of currently being processed types and types mentioned in polymorphic variant definitions.
- *  For descrs structure see comment to make_descrs function.
+(* Get names of currently being processed types and types mentioned in polymorphic variant
+ * definitions.  For descrs structure see comment to make_descrs function.
  *)
 let involved_type_names descrs : type_name list =
   let processed_mut_rec_types = map fst descrs in
@@ -266,8 +270,8 @@ let involved_type_names descrs : type_name list =
        processed_mut_rec_types
 
 
-(** Returns piece of AST referred to a general catamorphism
- *  (in another words, a traversal function) for given qualified type name.
+(* Returns piece of AST referred to a general catamorphism (in another words, a traversal
+ * function) for given qualified type name.
  *)
 let generic_cata_for_qualified_name loc (is_one_of_processed_mut_rec_types : type_name -> bool) qualified_name =
   let module H = Plugin.Helper (struct let loc = loc end) in
@@ -281,8 +285,9 @@ let generic_cata_for_qualified_name loc (is_one_of_processed_mut_rec_types : typ
 
 
 module Names = struct
-  (** Create a fresh (namespace : name_hint -> actual_name) which is an associative array of unique (with respect to given
-   *  name_generator instance) actual names with name hints as array keys.
+  (* Create a fresh (namespace : name_hint -> actual_name) which is an associative array of
+   * unique (with respect to given name_generator instance) actual names with name hints as
+   * array keys.
    *)
   let create_namespace (name_generator : < generate : string -> string; .. >) : string -> string =
     let new_namespace () =
@@ -532,49 +537,55 @@ let class_info loc ~is_virtual class_name class_parameters class_definition = {
   }
 
 
-(** Returns list of type case argument types. Type case arguments are variant arguments in case of variant type,
- *  tuple elemements in case of tuple, field values in case of record and so on.
+(* Returns list of type case argument types. Type case arguments are variant arguments in case
+ * of variant type, tuple elemements in case of tuple, field values in case of record and so
+ * on.
  *)
 let arg_typs_of_case_description loc = function
   | `Record fields -> map get3_3 fields
   | `Tuple element_typs -> element_typs
   | `Constructor (_, carg_typs) -> carg_typs
-  | `Type _ -> oops loc "arg_typs_of_case_description: metaclasses for type instances are not supported now"
+  | `Type _ -> oops loc ("arg_typs_of_case_description:"
+                       ^ " metaclasses for type instances are not supported now")
 
 let method_name_of_case_description loc = function
   | `Record _ | `Tuple _ -> vmethod
   | `Constructor (cname, _) -> cmethod cname
-  | `Type _ -> oops loc "method_name_of_case_description: metaclasses for type instances are not supported now"
+  | `Type _ -> oops loc ("method_name_of_case_description:"
+                       ^ "metaclasses for type instances are not supported now")
 
 
 let metaclass_method loc
-                     type_parameters (*TODO: For some assertions only! Maybe need to be removed.*)
+                     type_parameters (*TODO: For assertions only! Maybe need to be removed.*)
                      case_description =
   let module H = Plugin.Helper (struct let loc = loc end) in
-  let self_arg = H.T.app (<:ctyp< GT.a >> :: map H.T.var Names.metaclass#augmented_arg_parameters) in
-
-  (* Returns ctyp of metaclass method actual argument that corresponds to some variant constructor argument or tuple
-   * element or something else.
+  let self_arg =
+    H.T.app (<:ctyp< GT.a >> :: map H.T.var Names.metaclass#augmented_arg_parameters)
+  in
+  (* Returns ctyp of metaclass method actual argument that corresponds to some variant
+   * constructor argument or tuple element or something else.
    *)
   let rec arg_ctyp_of_typ = function
     | Variable (_, type_var) ->
-        (* If the argument type is one of the type parameters, actual argument type of metaclass method
-         * should be abstracted out by corresponding metaclass parameter: parameter_arg.
-         * This is so sad because actual type of transformation object method arguments, which class type
-         * is should be derived from the metaclass, depends on whether the type parameter was fixed by
-         * instantiation or not. In first case actual argument type should be equal to the type of corresponding
-         * constructor argument (or tuple element or something), in second case it should be augmented.
+        (* If the argument type is one of the type parameters, actual argument type of
+         * metaclass method should be abstracted out by corresponding metaclass parameter:
+         * parameter_arg. This is so sad because actual type of transformation object
+         * method arguments, which class type is should be derived from the metaclass,
+         * depends on whether the type parameter was fixed by instantiation or not. In first
+         * case actual argument type should be equal to the type of corresponding constructor
+         * argument (or tuple element or something), in second case it should be augmented.
          * So, we have to defer the decision.
          *)
         assert (mem type_var type_parameters);
         H.T.var (Names.metaclass#parameter_arg type_var)
     | Tuple (_, typs) ->
-        (* TODO: Probably incosistent behaviour here: for some constructor arguments (or tuple elements or something)
-         * we do deep pattern matching, in current case, if the argument is a tuple. But for arguments of other types
-         * we don't, and can't do such thing in general case. So, for what we do it for tuples? Maybe because there is no
-         * big difference between variant constructor with many arguments and a variant constructor with one
-         * tuple argument wraping all that arguments together, especially if we deel with polymorphic variant type.
-         * Or maybe it is just a mess.
+        (* TODO: Probably incosistent behaviour here: for some constructor arguments (or tuple
+         * elements or something) we do deep pattern matching, in current case, if the
+         * argument is a tuple. But for arguments of other types we don't, and can't do such
+         * thing in general case. So, for what we do it for tuples? Maybe because there is no
+         * big difference between variant constructor with many arguments and a variant
+         * constructor with one tuple argument wraping all that arguments together, especially
+         * if we deel with polymorphic variant type.  Or maybe it is just a mess.
          *)
         H.T.tuple (map arg_ctyp_of_typ typs)
     | Self (_ , _, _) -> self_arg
@@ -589,7 +600,10 @@ let metaclass_method loc
   <:class_sig_item< method $lid: name$ : $ctyp$ >>
 
 
-let metaclass loc type_name type_parameters case_descriptions =
+let metaclass loc
+              type_name
+              type_parameters
+              case_descriptions =
   let name = Names.metaclass#name type_name in
   let methods =
     case_descriptions
@@ -604,7 +618,9 @@ let metaclass loc type_name type_parameters case_descriptions =
     in
     for_type_parameters @ Names.metaclass#augmented_arg_parameters
   in
-  <:str_item< class type $list: [class_info loc ~is_virtual:false name parameters definition]$ >>
+  <:str_item< class type $list:
+    [ class_info loc ~is_virtual:false name parameters definition
+    ]$ >>
 
 
 let transformer_class loc
@@ -621,7 +637,8 @@ let transformer_class loc
   in
   let augmented_arg parameter =
     let (inh, syn) = transformer_names#attribute_parameters_of parameter in
-    H.T.app (<:ctyp< GT.a >> :: map H.T.var [inh; parameter; syn] @ [transforms_obj_parameter])
+    H.T.app (<:ctyp< GT.a >> ::
+             map H.T.var [inh; parameter; syn] @ [transforms_obj_parameter])
   in
   let metaclass_parameters =
     let for_type_parameters =
@@ -647,7 +664,9 @@ let transformer_class loc
     ; self_catamorphism_method
     ]$ end >>
   in
-  <:str_item< class type $list: [class_info loc ~is_virtual:false name transformer_names#parameters definition]$ >>
+  <:str_item< class type $list:
+    [ class_info loc ~is_virtual:false name transformer_names#parameters definition
+    ]$ >>
 
 
 let class_items loc
@@ -916,9 +935,9 @@ let get_derived_classes loc plugin_classes_generator type_descriptor =
      Plugin.generate_classes loc trait type_descriptor p (context.this, context.env, env_t, cproto, ce, cproto_t, ct)
   )
 
-(** Generate list of ctyps of type parameter transformation functions (or transforms, in short.)
- *  All of those types looks like iparam -> param -> sparam.
- *  To generate such types you need know names, nothing more.
+(* Generate list of ctyps of type parameter transformation functions (or transforms, in
+ * short.) All of those types looks like iparam -> param -> sparam.  To generate such types
+ * you need know names, nothing more.
  *)
 let make_parameter_transform_ctyps loc names : ctyp list =
   let module H = Plugin.Helper (struct let loc = loc end) in
@@ -930,7 +949,7 @@ let make_parameter_transform_ctyps loc names : ctyp list =
      ]))
 
 
-(** Create object full of type parameter transformation functions.
+(* Create object full of type parameter transformation functions.
  *)
 let create_parameter_transforms_obj loc names =
   let module H = Plugin.Helper (struct let loc = loc end) in
@@ -1110,8 +1129,8 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
   )
 
 
-(** Process by type_decl_to_description function type declarations only for which it have been requested by user.
- *  See comment to generate function for details.
+(* Process by type_decl_to_description function type declarations only for which it have been
+ * requested by user.  See comment to generate function for details.
  *)
 let make_descrs mut_rec_type_decls : (type_name * (parameter list * [> (* description *) ] * plugin_name list)) list =
   fold_right (fun (loc, type_decl, request) acc ->
@@ -1140,12 +1159,12 @@ let open_polymorphic_variant_type loc type_decl =
   | _ -> []
 
 
-(** mut_rec_type_decls argument is a group of mutual recursive type declarations, in which each element is original
- *  OCaml type declaration and an optional list of plugin names.
- *  If list is present (and maybe empty), the framework will generate a generic traversal function and an abstract
- *  transformer class and auxiliary class types.
- *  If it's not, type declaration will be ignored by the framework.
- *  If list is present and non-empty, corresponding plugins code will be generated as well.
+(* mut_rec_type_decls argument is a group of mutual recursive type declarations, in which each
+ * element is original OCaml type declaration and an optional list of plugin names.  If list
+ * is present (and maybe empty), the framework will generate a generic traversal function and
+ * an abstract transformer class and auxiliary class types.  If it's not, type declaration
+ * will be ignored by the framework.  If list is present and non-empty, corresponding plugins
+ * code will be generated as well.
  *)
 let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list option) list) =
   let module H = Plugin.Helper (struct let loc = loc end) in
@@ -1156,7 +1175,9 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
     |> map (fun (type_name, (type_parameters, description, plugin_names)) ->
         generate_definitions_for_single_type loc descrs type_name type_parameters description plugin_names)
   in
-  let names, defs, decls, classes, derived_classes, metaclasses, transformer_classes = split7 per_mut_rec_type_definitions in
+  let names, defs, decls, classes, derived_classes, metaclasses, transformer_classes =
+    split7 per_mut_rec_type_definitions
+  in
   let pnames, tnames = split names in
   let class_defs, class_decls = split classes in
   let derived_class_defs, derived_class_decls =
