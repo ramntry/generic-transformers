@@ -239,7 +239,6 @@ let type_decl_to_description loc type_decl : (type_name * parameter list * [
     in
     (type_name, type_parameters, recognize_top_level_and_convert_rest_to_typ type_decl.tdDef)
 
-
 (** Return list of type case descriptions. Variant or polymorphic variant type has as many
  *  cases as constructors, tuple or record consist of one case - the tuple or record itself.
  *)
@@ -555,14 +554,16 @@ let arg_typs_of_case_description loc = function
   | `Record fields -> map get3_3 fields
   | `Tuple element_typs -> element_typs
   | `Constructor (_, carg_typs) -> carg_typs
-  | `Type _ -> oops loc ("arg_typs_of_case_description:"
-                       ^ " metaclasses for type instances are not supported now")
+  | `Type _ -> oops loc ("metaclass_method => arg_typs_of_case_description:"
+                       ^ " can not extract argument typs from type instance"
+                       ^ " (should not happen)")
 
 let method_name_of_case_description loc = function
   | `Record _ | `Tuple _ -> vmethod
   | `Constructor (cname, _) -> cmethod cname
-  | `Type _ -> oops loc ("method_name_of_case_description:"
-                       ^ "metaclasses for type instances are not supported now")
+  | `Type _ -> oops loc ("metaclass_method => method_name_of_case_description:"
+                       ^ " can not determine method name for type instance"
+                       ^ " (should not happen)")
 
 
 let metaclass_method loc
@@ -610,16 +611,8 @@ let metaclass_method loc
   <:class_sig_item< method $lid: name$ : $ctyp$ >>
 
 
-let metaclass loc
-              type_name
-              type_parameters
-              case_descriptions =
+let metaclass_with_object_items loc object_items type_name type_parameters =
   let name = Names.metaclass#name type_name in
-  let methods =
-    case_descriptions
-    |> map (metaclass_method loc type_parameters)
-  in
-  let definition = <:class_type< object $list: methods$ end >> in
   let parameters =
     let for_type_parameters =
       type_parameters
@@ -628,9 +621,73 @@ let metaclass loc
     in
     for_type_parameters @ Names.metaclass#augmented_arg_parameters
   in
+  let definition = <:class_type< object $list: object_items$ end >> in
   <:str_item< class type $list:
     [ class_info loc ~is_virtual:false name parameters definition
     ]$ >>
+
+
+let inherit_metaclass_for loc type_name metaclass_parameters =
+  let metaclass_ident = <:class_type< $id: Names.metaclass#name type_name$ >> in
+  let metaclass_instance =
+    <:class_type< $metaclass_ident$ [ $list: metaclass_parameters$ ] >>
+  in
+  <:class_sig_item< inherit $metaclass_instance$ >>
+
+
+let derive_metaclass_from_type_def loc type_name type_parameters case_descriptions =
+  let methods =
+    case_descriptions
+    |> map (metaclass_method loc type_parameters)
+  in
+  metaclass_with_object_items loc methods type_name type_parameters
+
+
+let rec parameter_arg_ctyp loc type_parameters actual_type_parameter_typ =
+  let self = parameter_arg_ctyp loc type_parameters in
+  match actual_type_parameter_typ with
+  | Variable (_, var_name) when mem var_name type_parameters ->
+      let parameter_arg = Names.metaclass#parameter_arg var_name in
+      <:ctyp< ' $parameter_arg$ >>
+  | Tuple (_, typs) -> <:ctyp< ( $list: map self typs$ ) >>
+  | _ -> ctyp_of actual_type_parameter_typ
+
+let derive_metaclass_from_metaclass loc
+                                    type_name
+                                    type_parameters
+                                    (parameter_typs, qualified_name) =
+  let module H = Plugin.Helper (struct let loc = loc end) in
+  let parent_type_name =
+    match qualified_name with
+    | [type_name] -> type_name
+    | _ -> oops loc ("metaclass => derive_metaclass_from_metaclass:"
+                   ^ " qualified type names are not supported.")
+  in
+  let parent_metaclass_parameters =
+    let for_type_parameters =
+      parameter_typs
+      |> map (fun parameter_typ ->
+          [ ctyp_of parameter_typ
+          ; parameter_arg_ctyp loc type_parameters parameter_typ
+          ])
+      |> flatten
+    in
+    for_type_parameters @ map H.T.var Names.metaclass#augmented_arg_parameters
+  in
+  let inherit_metaclass =
+    inherit_metaclass_for loc parent_type_name parent_metaclass_parameters
+  in
+  metaclass_with_object_items loc [inherit_metaclass] type_name type_parameters
+
+
+let metaclass loc type_name type_parameters case_descriptions =
+  match case_descriptions with
+  | [`Type (Instance (_, parameter_typs, qualified_name))] ->
+      derive_metaclass_from_metaclass loc
+                                      type_name
+                                      type_parameters
+                                      (parameter_typs, qualified_name)
+  | _ -> derive_metaclass_from_type_def loc type_name type_parameters case_descriptions
 
 
 let transformer_class loc
@@ -640,6 +697,7 @@ let transformer_class loc
                       parameter_transforms_obj_ctyp
                       self_catamorphism_method =
   let module H = Plugin.Helper (struct let loc = loc end) in
+  Printf.fprintf stderr "[DEBUG]: call: transformer_class\n";
   let name = class_tt type_name in
   let transforms_obj_parameter = <:ctyp< ' $Names.metaclass#parameter_transforms_obj$ >> in
   let transforms_obj_constraint =
@@ -663,14 +721,9 @@ let transformer_class loc
     ; transforms_obj_parameter
     ]
   in
-  let metaclass_ident = <:class_type< $id: Names.metaclass#name type_name$ >> in
-  let metaclass_instance =
-    <:class_type< $metaclass_ident$ [ $list: metaclass_parameters$ ] >>
-  in
-  let inherit_metaclass = <:class_sig_item< inherit $metaclass_instance$ >> in
   let definition = <:class_type< object $list:
     [ transforms_obj_constraint
-    ; inherit_metaclass
+    ; inherit_metaclass_for loc type_name metaclass_parameters
     ; self_catamorphism_method
     ]$ end >>
   in
@@ -1047,10 +1100,10 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
   let catamorphism_match_cases =
     case_descriptions
     |> map (match_case_for loc
-                            names
-                            plugin_names
-                            is_one_of_processed_mut_rec_types
-                            is_polymorphic_variant)
+                           names
+                           plugin_names
+                           is_one_of_processed_mut_rec_types
+                           is_polymorphic_variant)
   in
   let base_types =
     case_descriptions
@@ -1120,7 +1173,7 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
       let when_guard_expr = VaVal None in
       local_defs_and_then (H.E.match_e subject (map (insert2_2 when_guard_expr) catamorphism_match_cases))
   in
-  ( ( H.P.constr (H.P.id type_name) gt_record_ctyp
+  ( (*( H.P.constr (H.P.id type_name) gt_record_ctyp
     , H.E.record [(<:patt< GT.gcata >>, H.E.id (cata type_name))]
     )
   , ( H.P.id (cata type_name)
@@ -1144,7 +1197,7 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
       , class_decl :: flatten edecls @ pdecls @ decls
       )
     end
-  , metaclass_decl
+  , *)metaclass_decl
   , transformer_class_decl
   )
 
@@ -1195,9 +1248,10 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
     |> map (fun (type_name, (type_parameters, description, plugin_names)) ->
         generate_definitions_for_single_type loc descrs type_name type_parameters description plugin_names)
   in
-  let names, defs, decls, classes, derived_classes, metaclasses, transformer_classes =
-    split7 per_mut_rec_type_definitions
+  let (*names, defs, decls, classes, derived_classes, *)metaclasses, transformer_classes =
+    split per_mut_rec_type_definitions
   in
+  (*
   let pnames, tnames = split names in
   let class_defs, class_decls = split classes in
   let derived_class_defs, derived_class_decls =
@@ -1205,8 +1259,25 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
     class_defs @ (flatten protos) @ (flatten defs), flatten class_decls
   in
   let cata_def = <:str_item< value $list: [H.P.tuple pnames, H.E.letrec defs (H.E.tuple tnames)]$ >> in
+  *)
   let open_polymorphic_variant_types = flatten (map (open_polymorphic_variant_type loc) type_decls) in
   let type_def = <:str_item< type $list: type_decls @ open_polymorphic_variant_types$ >> in
   let type_decl = <:sig_item< type $list: type_decls @ open_polymorphic_variant_types$ >> in
-  <:str_item< declare $list: type_def :: metaclasses @ transformer_classes @ [cata_def] @ derived_class_defs$ end >>,
-  <:sig_item< declare $list: type_decl :: class_decls @ decls @ derived_class_decls$ end >>
+  ( <:str_item< declare $list:
+      [type_def]
+      @ metaclasses
+      @ transformer_classes
+      (*
+      @ [cata_def]
+      @ derived_class_defs
+      *)
+      $ end >>
+  , <:sig_item< declare $list:
+      [type_decl]
+      (*
+      @ class_decls
+      @ decls
+      @ derived_class_decls
+      *)
+      $ end >>
+  )

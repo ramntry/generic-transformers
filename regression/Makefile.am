@@ -3,7 +3,10 @@ test009 test014 test015 test016\
 test017 test018 test019 test020 test021 test022 \
 test027 test028 test029 test030 test031 test102\
 test103\
-test104
+test104\
+test105\
+test106\
+test107
 
 
 # Problematic tests: 
