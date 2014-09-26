@@ -415,8 +415,7 @@ let apply_plugins loc type_descriptor plugin_names : (plugin_name * (properties 
   combine plugin_names properties_and_generators
 
 
-let generic_cata_match_case loc names plugin_names pattern method_name arg_names arg_typs =
-  Plugin.load_plugins plugin_names;
+let generic_cata_match_case loc names pattern method_name arg_names arg_typs =
   let module H = Plugin.Helper (struct let loc = loc end) in
   let method_selection =
     H.E.method_selection (H.E.id names.Names.catamorphism#transformer) method_name
@@ -461,53 +460,6 @@ let generic_cata_match_case loc names plugin_names pattern method_name arg_names
     )
   in
   (pattern, expr)
-
-
-let match_case_for loc
-                   names
-                   plugin_names
-                   is_one_of_processed_mut_rec_types
-                   is_polymorphic_variant
-                   case_description =
-  let module H = Plugin.Helper (struct let loc = loc end) in
-  let cata_match_case = generic_cata_match_case loc names plugin_names in
-  match case_description with
-  | `Record fields ->
-      let (field_names, _is_mutable, field_typs) = split3 fields in
-      let binded_names = map (fun name -> names.Names.transformer#generator#generate name) field_names in
-      let pattern = H.P.record (combine (map H.P.id field_names) (map H.P.id binded_names)) in
-      cata_match_case pattern vmethod binded_names field_typs
-
-  | `Tuple element_typs ->
-      let binded_names = mapi (fun i _ -> sprintf "elem%d" i) element_typs in
-      let pattern = H.P.tuple (map H.P.id binded_names) in
-      cata_match_case pattern vmethod binded_names element_typs
-
-  | `Constructor (cname, carg_typs) ->
-      let binded_names = mapi (fun i _ -> sprintf "arg%d" i) carg_typs in
-      let constructor_tag = (if is_polymorphic_variant then H.P.variant else H.P.id) cname in
-      let pattern = H.P.app (constructor_tag :: map H.P.id binded_names) in
-      let match_case_method_name = cmethod cname in
-      cata_match_case pattern match_case_method_name binded_names carg_typs
-
-  | `Type (Instance (_, parameter_typs, qname)) ->
-      let parameters : parameter list =
-        parameter_typs
-        |> map (function
-            | Variable (_, var_name) -> var_name
-            | _ -> oops loc "match_case_for: unsupported case (non-variable in instance)")
-      in (* TODO *)
-      let expr =
-        H.E.app (
-          (generic_cata_for_qualified_name loc is_one_of_processed_mut_rec_types qname)
-          :: ((map (fun p -> H.E.id (names.Names.catamorphism#transform_for p)) parameters)
-              @ [H.E.id names.Names.catamorphism#transformer;
-                 H.E.id names.Names.catamorphism#initial_inh;
-                 H.E.id names.Names.catamorphism#subject]))
-      in
-      (H.P.alias (H.P.type_p qname) (H.P.id names.Names.catamorphism#subject), expr)
-
-  | _ -> oops loc "unsupported type case description (internal error in match_case_for function)"
 
 
 let class_items_for_match_case_method_gen loc
@@ -1037,6 +989,124 @@ let create_parameter_transforms_obj loc names =
   H.E.obj method_definitions
 
 
+let match_case_for loc
+                   names
+                   is_one_of_processed_mut_rec_types
+                   is_polymorphic_variant
+                   case_description =
+  let module H = Plugin.Helper (struct let loc = loc end) in
+  let cata_match_case = generic_cata_match_case loc names in
+  match case_description with
+  | `Record fields ->
+      let (field_names, _is_mutable, field_typs) = split3 fields in
+      let binded_names = map (fun name -> names.Names.transformer#generator#generate name) field_names in
+      let pattern = H.P.record (combine (map H.P.id field_names) (map H.P.id binded_names)) in
+      cata_match_case pattern vmethod binded_names field_typs
+
+  | `Tuple element_typs ->
+      let binded_names = mapi (fun i _ -> sprintf "elem%d" i) element_typs in
+      let pattern = H.P.tuple (map H.P.id binded_names) in
+      cata_match_case pattern vmethod binded_names element_typs
+
+  | `Constructor (cname, carg_typs) ->
+      let binded_names = mapi (fun i _ -> sprintf "arg%d" i) carg_typs in
+      let constructor_tag = (if is_polymorphic_variant then H.P.variant else H.P.id) cname in
+      let pattern = H.P.app (constructor_tag :: map H.P.id binded_names) in
+      let match_case_method_name = cmethod cname in
+      cata_match_case pattern match_case_method_name binded_names carg_typs
+
+  | `Type (Instance (_, parameter_typs, qname)) ->
+      let parameters : parameter list =
+        parameter_typs
+        |> map (function
+            | Variable (_, var_name) -> var_name
+            | _ -> oops loc "match_case_for: unsupported case (non-variable in instance)")
+      in (* TODO *)
+      (* Generic catamorphism body for type instance *)
+      let expr =
+        H.E.app (
+          (generic_cata_for_qualified_name loc is_one_of_processed_mut_rec_types qname)
+          :: ((map (fun p -> H.E.id (names.Names.catamorphism#transform_for p)) parameters)
+              @ [H.E.id names.Names.catamorphism#transformer;
+                 H.E.id names.Names.catamorphism#initial_inh;
+                 H.E.id names.Names.catamorphism#subject]))
+      in
+      (H.P.alias (H.P.type_p qname) (H.P.id names.Names.catamorphism#subject), expr)
+
+  | _ -> oops loc "unsupported type case description (internal error in match_case_for function)"
+
+
+let make_gt_records_def_components loc
+                                   names
+                                   type_descriptor
+                                   case_descriptions
+                                   is_one_of_processed_mut_rec_types
+                                   parameter_transform_ctyps
+                                   type_transform_ctyp =
+  let module H = Plugin.Helper (struct let loc = loc end) in
+  let catamorphism_match_cases =
+    case_descriptions
+    |> map (match_case_for loc
+                           names
+                           is_one_of_processed_mut_rec_types
+                           type_descriptor.is_polymorphic_variant)
+  in
+  let cata_metarg_names =
+    (map names.Names.catamorphism#transform_for type_descriptor.parameters) @ [names.Names.catamorphism#transformer]
+  in
+  let parameter_transforms_obj = create_parameter_transforms_obj loc names in
+  let subject = H.E.id names.Names.catamorphism#subject in
+  let local_defs_and_then expr =
+    let local_defs = [
+        H.P.id names.Names.transformer#self, H.E.app (H.E.id (cata type_descriptor.name) :: map H.E.id cata_metarg_names);
+        H.P.id names.Names.transformer#parameter_transforms_obj, parameter_transforms_obj;
+      ]
+    in
+    match local_defs with
+    | [] -> expr
+    | _  -> H.E.letrec local_defs expr
+  in
+  let base_types =
+    case_descriptions
+    |> map (base_types_for loc)
+    |> flatten
+  in
+  let is_abbrev = not type_descriptor.is_polymorphic_variant && length base_types = 1 in
+  let body =
+    if is_abbrev
+    then
+      let ((_, expr), _) = hdtl loc catamorphism_match_cases in
+      expr
+    else
+      let when_guard_expr = VaVal None in
+      local_defs_and_then (H.E.match_e subject (map (insert2_2 when_guard_expr) catamorphism_match_cases))
+  in
+  let cata_arg_names =
+    cata_metarg_names @ [names.Names.catamorphism#initial_inh; names.Names.catamorphism#subject]
+  in
+  let gt_record_ctyp =
+    let transformer = H.T.app (H.T.class_t [class_tt type_descriptor.name] :: map H.T.var names.Names.transformer#parameters) in
+    let generic_catamorphism = H.T.arrow (parameter_transform_ctyps @ [transformer; type_transform_ctyp]) in
+    let gt_record = H.T.acc [H.T.id "GT"; H.T.id "t"] in
+    H.T.app [gt_record; generic_catamorphism]
+  in
+  let gt_record_pattern = H.P.constr (H.P.id type_descriptor.name) gt_record_ctyp in
+  let generic_catamorphism_pattern = H.P.id (cata type_descriptor.name) in
+  let generic_catamorphism = H.E.func (map H.P.id cata_arg_names) body in
+  let gt_record = H.E.record [(<:patt< GT.gcata >>, H.E.id (cata type_descriptor.name))] in
+  let gt_record_decl = <:sig_item< value $type_descriptor.name$ : $gt_record_ctyp$ >> in
+  let gt_records_components =
+    ( gt_record_pattern
+    , ( generic_catamorphism_pattern
+      , generic_catamorphism
+      )
+    , gt_record
+    , gt_record_decl
+    )
+  in
+  gt_records_components
+
+
 let generate_definitions_for_single_type loc descrs type_name type_parameters description plugin_names =
   Plugin.load_plugins plugin_names;
   let module H = Plugin.Helper (struct let loc = loc end) in
@@ -1066,26 +1136,17 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
   }
   in
   let parameter_transform_ctyps = make_parameter_transform_ctyps loc names in
-  let parameter_transforms_obj = create_parameter_transforms_obj loc names in
   let parameter_transforms_obj_ctyp =
     H.T.obj (combine names.Names.transformer#methods_of_transforms_obj parameter_transform_ctyps) ~is_open_type:false
   in
   let type_instance_ctyp = H.T.app (H.T.id type_name :: map H.T.var type_parameters) in
-  let type_transform =
+  let type_transform_ctyp =
     H.T.arrow [H.T.var names.Names.transformer#inh; type_instance_ctyp; H.T.var names.Names.transformer#syn]
   in
   let self_catamorphism_method =
-    let catamorphism_with_binded_transformer = H.T.arrow (parameter_transform_ctyps @ [type_transform]) in
+    let catamorphism_with_binded_transformer = H.T.arrow (parameter_transform_ctyps @ [type_transform_ctyp]) in
     <:class_sig_item< method $lid: tmethod type_name$ : $catamorphism_with_binded_transformer$ >>
   in
-  (*
-  let gt_record_ctyp =
-    let transformer = H.T.app (H.T.class_t [class_tt type_name] :: map H.T.var names.Names.transformer#parameters) in
-    let generic_catamorphism = H.T.arrow (parameter_transform_ctyps @ [transformer; type_transform]) in
-    let gt_record = H.T.acc [H.T.id "GT"; H.T.id "t"] in
-    H.T.app [gt_record; generic_catamorphism]
-  in
-  *)
   let is_one_of_processed_mut_rec_types type_name = mem_assoc type_name descrs in
   let plugin_classes_generator = get_plugin_classes_generator loc names descrs type_descriptor in
 (* ===--------------------------------------------------------------------=== *)
@@ -1100,21 +1161,15 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
                                   type_descriptor
                                   case)
   );
-  (*
-  let catamorphism_match_cases =
-    case_descriptions
-    |> map (match_case_for loc
-                           names
-                           plugin_names
-                           is_one_of_processed_mut_rec_types
-                           is_polymorphic_variant)
+(* ===--------------------------------------------------------------------=== *)
+  let metaclass_decl = metaclass loc type_name type_parameters case_descriptions in
+  let transformer_class_decl = transformer_class loc
+                                                 names.Names.transformer
+                                                 type_name
+                                                 type_instance_ctyp
+                                                 parameter_transforms_obj_ctyp
+                                                 self_catamorphism_method
   in
-  let base_types =
-    case_descriptions
-    |> map (base_types_for loc)
-    |> flatten
-  in
-  let is_abbrev = not is_polymorphic_variant && length base_types = 1 in
   let (methods, methods_sig, methods_sig_t) =
     case_descriptions
     |> map (class_items loc
@@ -1124,25 +1179,6 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
                         names.Names.transformer)
     |> split3
   in
-(* ===--------------------------------------------------------------------=== *)
-  let cata_metarg_names =
-    (map names.Names.catamorphism#transform_for type_parameters) @ [names.Names.catamorphism#transformer]
-  in
-  let cata_arg_names =
-    cata_metarg_names @ [names.Names.catamorphism#initial_inh; names.Names.catamorphism#subject]
-  in
-  let subject = H.E.id names.Names.catamorphism#subject in
-  let local_defs_and_then expr =
-    let local_defs = [
-        H.P.id names.Names.transformer#self, H.E.app (H.E.id (cata type_name) :: map H.E.id cata_metarg_names);
-        H.P.id names.Names.transformer#parameter_transforms_obj, parameter_transforms_obj;
-      ]
-    in
-    match local_defs with
-    | [] -> expr
-    | _  -> H.E.letrec local_defs expr
-  in
-  let proto_class_type = <:class_type< object $list: methods_sig_t @ [self_catamorphism_method]$ end >> in
   let class_expr =
     let this = names.Names.transformer#generator#generate "this" in
     let body =
@@ -1156,37 +1192,20 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
   let transformer_class_info class_name class_definition =
     class_info loc ~is_virtual:true class_name names.Names.transformer#parameters class_definition
   in
-  *)
-  let metaclass_decl = metaclass loc type_name type_parameters case_descriptions in
-  let transformer_class_decl = transformer_class loc
-                                                 names.Names.transformer
-                                                 type_name
-                                                 type_instance_ctyp
-                                                 parameter_transforms_obj_ctyp
-                                                 self_catamorphism_method
+  let gt_records_components = make_gt_records_def_components loc
+                                                             names
+                                                             type_descriptor
+                                                             case_descriptions
+                                                             is_one_of_processed_mut_rec_types
+                                                             parameter_transform_ctyps
+                                                             type_transform_ctyp
   in
-  (*
+  let proto_class_type = <:class_type< object $list: methods_sig_t @ [self_catamorphism_method]$ end >> in
   let class_type_def = <:str_item< class type $list: [transformer_class_info (class_tt type_name) proto_class_type]$ >> in
   let class_type_decl = <:sig_item< class type $list: [transformer_class_info (class_tt type_name) proto_class_type]$ >> in
-  let class_def  = <:str_item< class $list: [transformer_class_info (class_t type_name) class_expr]$ >> in
   let class_decl = <:sig_item< class $list: [transformer_class_info (class_t type_name) class_type]$ >> in
-  let body =
-    if is_abbrev
-    then
-      let ((_, expr), _) = hdtl loc catamorphism_match_cases in
-      expr
-    else
-      let when_guard_expr = VaVal None in
-      local_defs_and_then (H.E.match_e subject (map (insert2_2 when_guard_expr) catamorphism_match_cases))
-  in
-  *)
-  ( (*( H.P.constr (H.P.id type_name) gt_record_ctyp
-    , H.E.record [(<:patt< GT.gcata >>, H.E.id (cata type_name))]
-    )
-  , ( H.P.id (cata type_name)
-    , H.E.func (map H.P.id cata_arg_names) body
-    )
-  , <:sig_item< value $type_name$ : $gt_record_ctyp$ >>
+  let class_def  = <:str_item< class $list: [transformer_class_info (class_t type_name) class_expr]$ >> in
+  ( gt_records_components
   , ( class_type_def
     , class_type_decl
     )
@@ -1204,10 +1223,9 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
       , class_decl :: flatten edecls @ pdecls @ decls
       )
     end
-  , *)metaclass_decl
+  , metaclass_decl
   , transformer_class_decl
   )
-
 
 (* Process by type_decl_to_description function type declarations only for which it have been
  * requested by user.  See comment to generate function for details.
@@ -1238,7 +1256,6 @@ let open_polymorphic_variant_type loc type_decl =
       ]
   | _ -> []
 
-
 (* mut_rec_type_decls argument is a group of mutual recursive type declarations, in which each
  * element is original OCaml type declaration and an optional list of plugin names.  If list
  * is present (and maybe empty), the framework will generate a generic traversal function and
@@ -1248,43 +1265,46 @@ let open_polymorphic_variant_type loc type_decl =
  *)
 let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list option) list) =
   let module H = Plugin.Helper (struct let loc = loc end) in
-  let type_decls = map snd3 mut_rec_type_decls in
   let descrs = make_descrs mut_rec_type_decls in
   let per_mut_rec_type_definitions =
     descrs
     |> map (fun (type_name, (type_parameters, description, plugin_names)) ->
         generate_definitions_for_single_type loc descrs type_name type_parameters description plugin_names)
   in
-  let (*names, defs, decls, classes, derived_classes, *)metaclasses, transformer_classes =
-    split per_mut_rec_type_definitions
+  let gt_records_components, classes, derived_classes, metaclasses, transformer_classes =
+    split5 per_mut_rec_type_definitions
   in
-  (*
-  let pnames, tnames = split names in
   let class_defs, class_decls = split classes in
   let derived_class_defs, derived_class_decls =
     let class_defs, protos, defs, class_decls = split4 derived_classes in
     class_defs @ (flatten protos) @ (flatten defs), flatten class_decls
   in
-  let cata_def = <:str_item< value $list: [H.P.tuple pnames, H.E.letrec defs (H.E.tuple tnames)]$ >> in
+
+  let (gt_record_patterns, generic_catamorphisms_components, gt_records, gt_record_decls) =
+    split4 gt_records_components
+  in
+  let gt_records_def =
+    let def_body = H.E.letrec generic_catamorphisms_components (H.E.tuple gt_records) in
+    <:str_item< value $list: [(H.P.tuple gt_record_patterns, def_body)]$ >>
+  in
+
+  let type_decl_ctyps = map snd3 mut_rec_type_decls in
+  (*
   let open_polymorphic_variant_types = flatten (map (open_polymorphic_variant_type loc) type_decls) in
   *)
-  let type_def = <:str_item< type $list: type_decls (*@ open_polymorphic_variant_types*)$ >> in
-  let type_decl = <:sig_item< type $list: type_decls (*@ open_polymorphic_variant_types*)$ >> in
+  let type_def = <:str_item< type $list: type_decl_ctyps (*@ open_polymorphic_variant_types*)$ >> in
+  let type_decl = <:sig_item< type $list: type_decl_ctyps (*@ open_polymorphic_variant_types*)$ >> in
   ( <:str_item< declare $list:
       [type_def]
       @ metaclasses
       @ transformer_classes
-      (*
-      @ [cata_def]
+      @ [gt_records_def]
       @ derived_class_defs
-      *)
       $ end >>
   , <:sig_item< declare $list:
       [type_decl]
-      (*
       @ class_decls
-      @ decls
+      @ gt_record_decls
       @ derived_class_decls
-      *)
       $ end >>
   )
