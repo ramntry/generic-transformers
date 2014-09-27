@@ -390,6 +390,7 @@ module Names = struct
       method subject = subject
       method initial_inh = initial_inh
       method arg_of_parameter parameter = "arg_of_" ^ parameter
+      method arg_of_parameter_with = "arg_of_parameter_with"
       method self = "self"
     end
 
@@ -1123,6 +1124,63 @@ let derive_metacatamorphism_from_metacatamorpism loc =
   oops loc "derive_metacatamorphism_from_metacatamorpism: not implemented yet"
 
 
+let catamorphism_def_components loc
+                                names
+                                type_descriptor =
+  let module H = Plugin.Helper (struct let loc = loc end) in
+  let catamorphism_name = cata type_descriptor.name in
+  let transform_functions =
+    map names.Names.catamorphism#transform_for type_descriptor.parameters
+  in
+  let transformation_specific_formal_args =
+    transform_functions
+    @ [ names.Names.catamorphism#transformer ]
+  in
+  let formal_args =
+    transformation_specific_formal_args
+    @ [ names.Names.catamorphism#initial_inh
+      ; names.Names.catamorphism#subject
+      ]
+  in
+  let local_defs =
+    [ ( H.P.id names.Names.catamorphism#self
+      , H.E.app (H.E.id catamorphism_name :: map H.E.id transformation_specific_formal_args)
+      )
+    ; ( H.P.id names.Names.transformer#parameter_transforms_obj
+      , create_parameter_transforms_obj loc names
+      )
+    ; ( H.P.id names.Names.catamorphism#arg_of_parameter_with
+      , H.E.func [H.P.id "transform"; H.P.id "parameter"]
+                 (make_augmented_arg loc names (H.E.id "transform") (H.E.id "parameter"))
+      )
+    ]
+  in
+  let arg_of_parameter_functions =
+    map (fun transform ->
+        H.E.app [H.E.id names.Names.catamorphism#arg_of_parameter_with; H.E.id transform])
+      transform_functions
+  in
+  let metacatamorphism_actual_arguments =
+    [ H.E.id names.Names.catamorphism#self ]
+    @ arg_of_parameter_functions
+    @ map H.E.id
+        [ names.Names.transformer#parameter_transforms_obj
+        ; names.Names.catamorphism#transformer
+        ; names.Names.catamorphism#initial_inh
+        ; names.Names.catamorphism#subject
+        ]
+  in
+  let metacatamorphism_app =
+    H.E.app (H.E.id (metacata type_descriptor.name) :: metacatamorphism_actual_arguments)
+  in
+  let body = H.E.letrec local_defs metacatamorphism_app in
+  let catamorphism_pattern = H.P.id catamorphism_name in
+  let catamorphism = H.E.func (map H.P.id formal_args) body in
+  (*(catamorphism_pattern, catamorphism)*)
+  <:str_item< value rec $list: [(catamorphism_pattern, catamorphism)]$ >>
+
+
+
 let make_gt_records_def_components loc
                                    names
                                    type_descriptor
@@ -1316,6 +1374,7 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
   , metaclass_decl
   , transformer_class_decl
   , derive_metacatamorphism_from_type_def loc names type_descriptor case_descriptions
+  , catamorphism_def_components loc names type_descriptor
   )
 
 (* Process by type_decl_to_description function type declarations only for which it have been
@@ -1368,7 +1427,8 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
       , metaclasses
       , transformer_classes
       , metacatamorphisms
-      ) = split6 per_mut_rec_type_definitions
+      , catamorphisms
+      ) = split7 per_mut_rec_type_definitions
   in
 
   let class_defs, class_decls = split classes in
@@ -1397,6 +1457,7 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
       @ transformer_classes
       @ [gt_records_def]
       @ metacatamorphisms
+      @ catamorphisms
       @ derived_class_defs
       $ end >>
   , <:sig_item< declare $list:
