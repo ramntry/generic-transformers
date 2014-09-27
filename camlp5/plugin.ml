@@ -83,6 +83,7 @@ let rec name_generator reserved_names =
   end
 
 let cata type_name = type_name ^ "_gcata"
+let metacata type_name = type_name ^ "_metacata"
 let syn_parameter type_parameter = type_parameter ^ "_syn"
 let inh_parameter type_parameter = type_parameter ^ "_inh"
 let parameter_transform parameter = "transform_" ^ parameter
