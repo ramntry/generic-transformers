@@ -1176,11 +1176,37 @@ let catamorphism_def_components loc
   let body = H.E.letrec local_defs metacatamorphism_app in
   let catamorphism_pattern = H.P.id catamorphism_name in
   let catamorphism = H.E.func (map H.P.id formal_args) body in
-  (*(catamorphism_pattern, catamorphism)*)
-  <:str_item< value rec $list: [(catamorphism_pattern, catamorphism)]$ >>
+  (catamorphism_pattern, catamorphism)
 
 
+let make_gt_records_def_components loc
+                                   names
+                                   type_descriptor
+                                   parameter_transform_ctyps
+                                   type_transform_ctyp =
+  let module H = Plugin.Helper (struct let loc = loc end) in
+  let (generic_catamorphism_pattern, generic_catamorphism) =
+    catamorphism_def_components loc names type_descriptor
+  in
+  let gt_record_ctyp =
+    let transformer = H.T.app (H.T.class_t [class_tt type_descriptor.name] :: map H.T.var names.Names.transformer#parameters) in
+    let generic_catamorphism = H.T.arrow (parameter_transform_ctyps @ [transformer; type_transform_ctyp]) in
+    let gt_record = H.T.acc [H.T.id "GT"; H.T.id "t"] in
+    H.T.app [gt_record; generic_catamorphism]
+  in
+  let gt_record_pattern = H.P.constr (H.P.id type_descriptor.name) gt_record_ctyp in
+  let gt_record = H.E.record [(<:patt< GT.gcata >>, H.E.id (cata type_descriptor.name))] in
+  let gt_record_decl = <:sig_item< value $type_descriptor.name$ : $gt_record_ctyp$ >> in
+  ( gt_record_pattern
+  , ( generic_catamorphism_pattern
+    , generic_catamorphism
+    )
+  , gt_record
+  , gt_record_decl
+  )
 
+
+  (*
 let make_gt_records_def_components loc
                                    names
                                    type_descriptor
@@ -1253,6 +1279,7 @@ let make_gt_records_def_components loc
   , gt_record
   , gt_record_decl
   )
+  *)
 
 
 let generate_definitions_for_single_type loc descrs type_name type_parameters description plugin_names =
@@ -1343,8 +1370,6 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
   let gt_records_components = make_gt_records_def_components loc
                                                              names
                                                              type_descriptor
-                                                             case_descriptions
-                                                             is_one_of_processed_mut_rec_types
                                                              parameter_transform_ctyps
                                                              type_transform_ctyp
   in
@@ -1455,9 +1480,8 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
       [type_def]
       @ metaclasses
       @ transformer_classes
-      @ [gt_records_def]
       @ metacatamorphisms
-      @ catamorphisms
+      @ [gt_records_def]
       @ derived_class_defs
       $ end >>
   , <:sig_item< declare $list:
