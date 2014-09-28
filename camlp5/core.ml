@@ -384,6 +384,7 @@ module Names = struct
       fun parameter -> actual_name_for (parameter_transform parameter)
     in
     object
+      method generator = generator
       method transform_for = transform_for
       method reserved = reserved_names
       method transformer = transformer
@@ -1031,6 +1032,7 @@ let generic_cata_match_case loc names method_name arg_names arg_typs =
     ] @ match_case_args
   )
 
+
 let metacata_match_case_for loc
                             names
                             is_polymorphic_variant
@@ -1091,10 +1093,10 @@ let match_case_for loc
   | _ -> oops loc "unsupported type case description (internal error in match_case_for function)"
 
 
-let derive_metacatamorphism_from_type_def loc
-                                          names
-                                          type_descriptor
-                                          case_descriptions =
+let metacatamorphism_with_body loc
+                               body
+                               names
+                               type_descriptor =
   let module H = Plugin.Helper (struct let loc = loc end) in
   let formal_args =
     [ names.Names.catamorphism#self ]
@@ -1105,6 +1107,16 @@ let derive_metacatamorphism_from_type_def loc
       ; names.Names.catamorphism#subject
       ]
   in
+  let metacatamorphism_pattern = H.P.id (metacata type_descriptor.name) in
+  let metacatamorphism = H.E.func (map H.P.id formal_args) body in
+  <:str_item< value $list: [(metacatamorphism_pattern, metacatamorphism)]$ >>
+
+
+let derive_metacatamorphism_from_type_def loc
+                                          names
+                                          type_descriptor
+                                          case_descriptions =
+  let module H = Plugin.Helper (struct let loc = loc end) in
   let subject = H.E.id names.Names.catamorphism#subject in
   let catamorphism_match_cases =
     let match_case_for =
@@ -1115,13 +1127,71 @@ let derive_metacatamorphism_from_type_def loc
     |> map (insert2_2 when_guard_expr)
   in
   let body = H.E.match_e subject catamorphism_match_cases in
-  let metacatamorphism_pattern = H.P.id (metacata type_descriptor.name) in
-  let metacatamorphism = H.E.func (map H.P.id formal_args) body in
-  <:str_item< value $list: [(metacatamorphism_pattern, metacatamorphism)]$ >>
+  metacatamorphism_with_body loc body names type_descriptor
 
 
-let derive_metacatamorphism_from_metacatamorpism loc =
-  oops loc "derive_metacatamorphism_from_metacatamorpism: not implemented yet"
+let derive_metacatamorphism_from_metacatamorphism loc
+                                                  names
+                                                  type_descriptor
+                                                  parent_type_parameter_typs
+                                                  parent_type_qualified_name =
+  let module H = Plugin.Helper (struct let loc = loc end) in
+  let rec arg_of_parameter_function parameter_typ =
+    let name_generator = names.Names.catamorphism#generator#copy in
+    let rec make_components = function
+      | Tuple (_, typs) ->
+          let (patterns, expressions) = split (map make_components typs) in
+          (H.P.tuple patterns, H.E.tuple expressions)
+      | Variable (_, var_name) ->
+          let binded_name = name_generator#generate var_name in
+          ( H.P.id binded_name
+          , H.E.app
+              [ H.E.id (names.Names.catamorphism#arg_of_parameter var_name)
+              ; H.E.id binded_name
+              ]
+          )
+      | Arbitrary _ ->
+          let binded_name = name_generator#generate "elem" in
+          (H.P.id binded_name, H.E.id binded_name)
+      | _ -> oops loc ("derive_metacatamorphism_from_metacatamorphism =>"
+                     ^ " arg_of_parameter_functions => make_components:"
+                     ^ " not implemented yet for instances as actual type parameters")
+    in
+    let (pattern, expression) = make_components parameter_typ in
+    H.E.func [pattern] expression
+  in
+  let arg_of_parameter_functions =
+    map arg_of_parameter_function parent_type_parameter_typs
+  in
+  let parent_metacata_actual_args =
+    [ H.E.id names.Names.catamorphism#self ]
+    @ arg_of_parameter_functions
+    @ map H.E.id
+        [ names.Names.transformer#parameter_transforms_obj
+        ; names.Names.catamorphism#transformer
+        ; names.Names.catamorphism#initial_inh
+        ; names.Names.catamorphism#subject
+        ]
+  in
+  let parent_metacata =
+    match parent_type_qualified_name with
+    | [parent_type_name] -> metacata parent_type_name
+    | _ -> oops loc ("derive_metacatamorphism_from_metacatamorphism:"
+                   ^ " deriving for qualified parent types is not implemented yet")
+  in
+  let body = H.E.app (H.E.id parent_metacata :: parent_metacata_actual_args) in
+  metacatamorphism_with_body loc body names type_descriptor
+
+
+let metacatamorphism loc names type_descriptor case_descriptions =
+  match case_descriptions with
+  | [`Type (Instance (_, parameter_typs, qualified_name))] ->
+      derive_metacatamorphism_from_metacatamorphism loc
+                                                    names
+                                                    type_descriptor
+                                                    parameter_typs
+                                                    qualified_name
+  | _ -> derive_metacatamorphism_from_type_def loc names type_descriptor case_descriptions
 
 
 let catamorphism_def_components loc
@@ -1179,18 +1249,26 @@ let catamorphism_def_components loc
   (catamorphism_pattern, catamorphism)
 
 
-let make_gt_records_def_components loc
-                                   names
-                                   type_descriptor
-                                   parameter_transform_ctyps
-                                   type_transform_ctyp =
+let make_gt_record_def_components loc
+                                  names
+                                  type_descriptor
+                                  parameter_transform_ctyps
+                                  type_transform_ctyp =
   let module H = Plugin.Helper (struct let loc = loc end) in
   let (generic_catamorphism_pattern, generic_catamorphism) =
     catamorphism_def_components loc names type_descriptor
   in
   let gt_record_ctyp =
-    let transformer = H.T.app (H.T.class_t [class_tt type_descriptor.name] :: map H.T.var names.Names.transformer#parameters) in
-    let generic_catamorphism = H.T.arrow (parameter_transform_ctyps @ [transformer; type_transform_ctyp]) in
+    let transformer = H.T.app (
+      [ H.T.class_t [class_tt type_descriptor.name] ]
+      @ map H.T.var names.Names.transformer#parameters)
+    in
+    let generic_catamorphism = H.T.arrow (
+      parameter_transform_ctyps
+      @ [ transformer
+        ; type_transform_ctyp
+        ])
+    in
     let gt_record = H.T.acc [H.T.id "GT"; H.T.id "t"] in
     H.T.app [gt_record; generic_catamorphism]
   in
@@ -1207,7 +1285,7 @@ let make_gt_records_def_components loc
 
 
   (*
-let make_gt_records_def_components loc
+let make_gt_record_def_components loc
                                    names
                                    type_descriptor
                                    case_descriptions
@@ -1223,7 +1301,7 @@ let make_gt_records_def_components loc
   let body =
     match case_descriptions with
     | [`Type (Instance (_, parameter_typs, qualified_name))] ->
-        oops loc "make_gt_records_def_components: type instance can not be processed as type definition (should not happen)";
+        oops loc "make_gt_record_def_components: type instance can not be processed as type definition (should not happen)";
         let parameters : parameter list =
           parameter_typs
           |> map (function
@@ -1367,17 +1445,27 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
   let transformer_class_info class_name class_definition =
     class_info loc ~is_virtual:true class_name names.Names.transformer#parameters class_definition
   in
-  let gt_records_components = make_gt_records_def_components loc
-                                                             names
-                                                             type_descriptor
-                                                             parameter_transform_ctyps
-                                                             type_transform_ctyp
+  let gt_records_components = make_gt_record_def_components loc
+                                                            names
+                                                            type_descriptor
+                                                            parameter_transform_ctyps
+                                                            type_transform_ctyp
   in
   let proto_class_type = <:class_type< object $list: methods_sig_t @ [self_catamorphism_method]$ end >> in
   let class_type_def = <:str_item< class type $list: [transformer_class_info (class_tt type_name) proto_class_type]$ >> in
   let class_type_decl = <:sig_item< class type $list: [transformer_class_info (class_tt type_name) proto_class_type]$ >> in
-  let class_decl = <:sig_item< class $list: [transformer_class_info (class_t type_name) class_type]$ >> in
-  let class_def  = <:str_item< class $list: [transformer_class_info (class_t type_name) class_expr]$ >> in
+  let class_decl =
+    match case_descriptions with
+    | [`Type _] -> []
+    | _ ->
+        [ <:sig_item< class $list: [transformer_class_info (class_t type_name) class_type]$ >> ]
+  in
+  let class_def =
+    match case_descriptions with
+    | [`Type _] -> []
+    | _ ->
+      [ <:str_item< class $list: [transformer_class_info (class_t type_name) class_expr]$ >> ]
+  in
   ( gt_records_components
   , ( class_type_def
     , class_type_decl
@@ -1393,14 +1481,15 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
       ( class_def
       , flatten env @ protos
       , defs
-      , class_decl :: flatten edecls @ pdecls @ decls
+      , class_decl @ flatten edecls @ pdecls @ decls
       )
     end
   , metaclass_decl
   , transformer_class_decl
-  , derive_metacatamorphism_from_type_def loc names type_descriptor case_descriptions
+  , metacatamorphism loc names type_descriptor case_descriptions
   , catamorphism_def_components loc names type_descriptor
   )
+
 
 (* Process by type_decl_to_description function type declarations only for which it have been
  * requested by user.  See comment to generate function for details.
@@ -1459,7 +1548,7 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
   let class_defs, class_decls = split classes in
   let derived_class_defs, derived_class_decls =
     let class_defs, protos, defs, class_decls = split4 derived_classes in
-    class_defs @ (flatten protos) @ (flatten defs), flatten class_decls
+    (flatten class_defs) @ (flatten protos) @ (flatten defs), flatten class_decls
   in
 
   let (gt_record_patterns, generic_catamorphisms_components, gt_records, gt_record_decls) =
