@@ -52,11 +52,18 @@ let split5 list_of_tuples =
 
 let split6 list_of_tuples =
   List.fold_right (fun (a, b, c, d, e, f) (x, y, z, u, v, w) ->
-    (a :: x, b :: y, c :: z, d :: u, e :: v, f :: w)) list_of_tuples ([], [], [], [], [], [])
+      (a :: x, b :: y, c :: z, d :: u, e :: v, f :: w))
+    list_of_tuples ([], [], [], [], [], [])
 
 let split7 list_of_tuples =
   List.fold_right (fun (a, b, c, d, e, f, g) (x, y, z, u, v, w, t) ->
-    (a :: x, b :: y, c :: z, d :: u, e :: v, f :: w, g :: t)) list_of_tuples ([], [], [], [], [], [], [])
+      (a :: x, b :: y, c :: z, d :: u, e :: v, f :: w, g :: t))
+    list_of_tuples ([], [], [], [], [], [], [])
+
+let split8 list_of_tuples =
+  List.fold_right (fun (a, b, c, d, e, f, g, h) (x, y, z, u, v, w, t, p) ->
+      (a :: x, b :: y, c :: z, d :: u, e :: v, f :: w, g :: t, h :: p))
+    list_of_tuples ([], [], [], [], [], [], [], [])
 
 let apply_to2 arg1 arg2 func = func arg1 arg2
 let map2 func (e1, e2) = (func e1, func e2)
@@ -329,6 +336,8 @@ module Names = struct
       depending_on_type_parameters @ [inh; syn]
     in
 
+    let self = generator#generate "self" in
+
     (** Generate names for some values.
      *)
     let parameter_transforms_obj = generator#generate "parameter_transforms_obj" in
@@ -349,6 +358,7 @@ module Names = struct
       method methods_of_transforms_obj = type_parameters
       method inh = inh
       method syn = syn
+      method self = self
     end
 
   (** Generate names for metaclass.
@@ -603,9 +613,8 @@ let transformer_class loc
                       type_name
                       type_instance_ctyp
                       parameter_transforms_obj_ctyp
-                      self_catamorphism_method =
+                      self_catamorphism_method_ctyp =
   let module H = Plugin.Helper (struct let loc = loc end) in
-  Printf.fprintf stderr "[DEBUG]: call: transformer_class\n";
   let name = class_tt type_name in
   let transforms_obj_parameter = <:ctyp< ' $Names.metaclass#parameter_transforms_obj$ >> in
   let transforms_obj_constraint =
@@ -632,7 +641,7 @@ let transformer_class loc
   let definition = <:class_type< object $list:
     [ transforms_obj_constraint
     ; inherit_metaclass_for loc type_name metaclass_parameters
-    ; self_catamorphism_method
+    ; self_catamorphism_method_ctyp
     ]$ end >>
   in
   <:str_item< class type $list:
@@ -640,6 +649,40 @@ let transformer_class loc
     ]$ >>
 
 
+let transformer_virtual_class loc
+                              names
+                              type_descriptor =
+  let module H = Plugin.Helper (struct let loc = loc end) in
+  let name = class_t type_descriptor.name in
+  let transformer_parameters = map H.T.var names.Names.transformer#parameters in
+  let transformer_generic_ctyp = <:ctyp< # $list: [ class_tt type_descriptor.name ]$ >> in
+  let transformer_ctyp = H.T.app (transformer_generic_ctyp :: transformer_parameters) in
+  let self_catamorphism_method =
+    let parameter_transforms =
+      map names.Names.catamorphism#transform_for type_descriptor.parameters
+    in
+    let body = H.E.app (
+      [ H.E.acc (map H.E.id ["GT"; "transform"]) ]
+      @ map H.E.id (
+        [ type_descriptor.name ]
+        @ parameter_transforms
+        @ [ names.Names.transformer#self ]))
+    in
+    let method_def = H.E.func (map H.P.id parameter_transforms) body in
+    <:class_str_item< method $lid:tmethod type_descriptor.name$ = $method_def$ >>
+  in
+  let self_pattern =
+    <:patt< ( $H.P.id names.Names.transformer#self$ : $transformer_ctyp$ ) >>
+  in
+  let definition =
+    <:class_expr< object ( $self_pattern$ ) $list:[ self_catamorphism_method ]$ end >>
+  in
+  <:str_item< class $list:
+    [ class_info loc ~is_virtual:true name names.Names.transformer#parameters definition
+    ]$ >>
+
+
+(*TODO: Deprecated and should be removed one day. *)
 let class_items loc
                 properties
                 type_instance_ctyp
@@ -1396,7 +1439,7 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
   let type_transform_ctyp =
     H.T.arrow [H.T.var names.Names.transformer#inh; type_instance_ctyp; H.T.var names.Names.transformer#syn]
   in
-  let self_catamorphism_method =
+  let self_catamorphism_method_ctyp =
     let catamorphism_with_binded_transformer = H.T.arrow (parameter_transform_ctyps @ [type_transform_ctyp]) in
     <:class_sig_item< method $lid: tmethod type_name$ : $catamorphism_with_binded_transformer$ >>
   in
@@ -1421,8 +1464,9 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
                                                  type_name
                                                  type_instance_ctyp
                                                  parameter_transforms_obj_ctyp
-                                                 self_catamorphism_method
+                                                 self_catamorphism_method_ctyp
   in
+  (*
   let (methods, methods_sig, methods_sig_t) =
     case_descriptions
     |> map (class_items loc
@@ -1432,16 +1476,26 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
                         names.Names.transformer)
     |> split3
   in
-  let class_expr =
-    let this = names.Names.transformer#generator#generate "this" in
-    let body =
-      let args = map names.Names.catamorphism#transform_for type_parameters in
-      H.E.func (map H.P.id args) (H.E.app ((H.E.acc (map H.E.id ["GT"; "transform"])) :: map H.E.id (type_name :: args@[this])))
+  *)
+
+  let self_catamorphism_method =
+    let parameter_transforms = map names.Names.catamorphism#transform_for type_parameters in
+    let body = H.E.app (
+      [ H.E.acc (map H.E.id ["GT"; "transform"]) ]
+      @ map H.E.id (type_name :: parameter_transforms @ [names.Names.transformer#self]))
     in
-    let met = <:class_str_item< method $lid:tmethod type_name$ = $body$ >> in
-    <:class_expr< object ($H.P.id this$) $list:methods@[met]$ end >>
+    let definition = H.E.func (map H.P.id parameter_transforms) body in
+    <:class_str_item< method $lid:tmethod type_name$ = $definition$ >>
   in
-  let class_type = <:class_type< object $list: methods_sig @ [self_catamorphism_method]$ end >> in
+  (*
+  let transformer_virtual_class_deprecated =
+    <:class_expr< object ($H.P.id names.Names.transformer#self$) $list:methods @ [self_catamorphism_method]$ end >>
+  in
+  *)
+
+  (*
+  let class_type = <:class_type< object $list: methods_sig @ [self_catamorphism_method_ctyp]$ end >> in
+  *)
   let transformer_class_info class_name class_definition =
     class_info loc ~is_virtual:true class_name names.Names.transformer#parameters class_definition
   in
@@ -1451,25 +1505,19 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
                                                             parameter_transform_ctyps
                                                             type_transform_ctyp
   in
-  let proto_class_type = <:class_type< object $list: methods_sig_t @ [self_catamorphism_method]$ end >> in
+  (*
+  let proto_class_type = <:class_type< object $list: methods_sig_t @ [self_catamorphism_method_ctyp]$ end >> in
   let class_type_def = <:str_item< class type $list: [transformer_class_info (class_tt type_name) proto_class_type]$ >> in
   let class_type_decl = <:sig_item< class type $list: [transformer_class_info (class_tt type_name) proto_class_type]$ >> in
-  let class_decl =
-    match case_descriptions with
-    | [`Type _] -> []
-    | _ ->
-        [ <:sig_item< class $list: [transformer_class_info (class_t type_name) class_type]$ >> ]
-  in
-  let class_def =
-    match case_descriptions with
-    | [`Type _] -> []
-    | _ ->
-      [ <:str_item< class $list: [transformer_class_info (class_t type_name) class_expr]$ >> ]
-  in
+  let class_decl = <:sig_item< class $list: [transformer_class_info (class_t type_name) class_type]$ >> in
+  let class_def = <:str_item< class $list: [transformer_class_info (class_t type_name) transformer_virtual_class_deprecated]$ >> in
+  *)
   ( gt_records_components
+  (*
   , ( class_type_def
     , class_type_decl
     )
+  *)
   , begin
       let (env, protos, defs, edecls, pdecls, decls) =
         plugin_properties_and_generators
@@ -1478,16 +1526,17 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
                                     type_descriptor)
         |> split6
       in
-      ( class_def
-      , flatten env @ protos
+      ( (*class_def
+      , *)flatten env @ protos
       , defs
-      , class_decl @ flatten edecls @ pdecls @ decls
+      , (*class_decl ::*) flatten edecls @ pdecls @ decls
       )
     end
   , metaclass_decl
   , transformer_class_decl
   , metacatamorphism loc names type_descriptor case_descriptions
   , catamorphism_def_components loc names type_descriptor
+  , transformer_virtual_class loc names type_descriptor
   )
 
 
@@ -1536,19 +1585,22 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
         generate_definitions_for_single_type loc descrs type_name type_parameters description plugin_names)
   in
   let ( gt_records_components
-      , classes
+(*      , classes*)
       , derived_classes
       , metaclasses
       , transformer_classes
       , metacatamorphisms
       , catamorphisms
+      , transformer_virtual_classes
       ) = split7 per_mut_rec_type_definitions
   in
 
+  (*
   let class_defs, class_decls = split classes in
+  *)
   let derived_class_defs, derived_class_decls =
-    let class_defs, protos, defs, class_decls = split4 derived_classes in
-    (flatten class_defs) @ (flatten protos) @ (flatten defs), flatten class_decls
+    let (*class_defs, *)protos, defs, class_decls = split3 derived_classes in
+    (*class_defs @*) (flatten protos) @ (flatten defs), flatten class_decls
   in
 
   let (gt_record_patterns, generic_catamorphisms_components, gt_records, gt_record_decls) =
@@ -1571,12 +1623,15 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
       @ transformer_classes
       @ metacatamorphisms
       @ [gt_records_def]
+      @ transformer_virtual_classes
       @ derived_class_defs
       $ end >>
   , <:sig_item< declare $list:
       [type_decl]
+      (*
       @ class_decls
       @ gt_record_decls
       @ derived_class_decls
+      *)
       $ end >>
   )
