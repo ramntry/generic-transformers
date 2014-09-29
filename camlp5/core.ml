@@ -581,17 +581,71 @@ let metaclass loc type_name type_parameters case_descriptions =
   | _ -> derive_metaclass_from_type_def loc type_name type_parameters case_descriptions
 
 
+(* Generate list of ctyps of type parameter transformation functions (or transforms, in
+ * short.) All of those types looks like param_inh -> param -> param_syn. To generate such
+ * types you need to know names, nothing more.
+ *)
+let make_parameter_transform_ctyps loc names : ctyp list =
+  let module H = Plugin.Helper (struct let loc = loc end) in
+  names.Names.transformer#type_parameters
+  |> map (fun parameter -> H.T.arrow (map H.T.var [
+        names.Names.transformer#inh_for parameter;
+        parameter;
+        names.Names.transformer#syn_for parameter;
+     ]))
+
+
+module Make_ctyps (Args : sig
+    val loc : loc
+    val names : Names.names
+    val type_descriptor : type_descriptor
+  end)
+  =
+  struct
+    include Args
+    module H = Plugin.Helper (struct let loc = loc end)
+
+    let parameter_transforms = make_parameter_transform_ctyps loc names
+
+    let parameter_transforms_obj = H.T.obj ~is_open_type:false (
+      combine names.Names.transformer#methods_of_transforms_obj parameter_transforms)
+
+    let type_instance =
+      H.T.app (H.T.id type_descriptor.name :: map H.T.var type_descriptor.parameters)
+
+    let type_transform = H.T.arrow
+      [ H.T.var names.Names.transformer#inh
+      ; type_instance
+      ; H.T.var names.Names.transformer#syn
+      ]
+
+    let self_catamorphism_method =
+      let catamorphism_with_binded_transformer =
+        H.T.arrow (parameter_transforms @ [type_transform])
+      in
+      <:class_sig_item< method $lid: tmethod type_descriptor.name$
+                             : $catamorphism_with_binded_transformer$ >>
+  end
+
+module type CTYPS = sig
+  val type_instance : ctyp
+  val type_transform : ctyp
+  val parameter_transforms : ctyp list
+  val parameter_transforms_obj : ctyp
+  val self_catamorphism_method : class_sig_item
+end
+
+
 let transformer_class loc
                       transformer_names
                       type_name
-                      type_instance_ctyp
-                      parameter_transforms_obj_ctyp
-                      self_catamorphism_method_ctyp =
+                      ctyps =
+  let module Ctyps = (val ctyps : CTYPS) in
   let module H = Plugin.Helper (struct let loc = loc end) in
   let name = class_tt type_name in
   let transforms_obj_parameter = <:ctyp< ' $Names.metaclass#parameter_transforms_obj$ >> in
   let transforms_obj_constraint =
-    <:class_sig_item< type $transforms_obj_parameter$ = $parameter_transforms_obj_ctyp$ >>
+    <:class_sig_item< type $transforms_obj_parameter$ = $Ctyps.parameter_transforms_obj$ >>
   in
   let augmented_arg parameter =
     let (inh, syn) = transformer_names#attribute_parameters_of parameter in
@@ -606,7 +660,7 @@ let transformer_class loc
     in
     for_type_parameters @
     [ <:ctyp< ' $Names.metaclass#inh$ >>
-    ; type_instance_ctyp
+    ; Ctyps.type_instance
     ; <:ctyp< ' $Names.metaclass#syn$ >>
     ; transforms_obj_parameter
     ]
@@ -614,7 +668,7 @@ let transformer_class loc
   let definition = <:class_type< object $list:
     [ transforms_obj_constraint
     ; inherit_metaclass_for loc type_name metaclass_parameters
-    ; self_catamorphism_method_ctyp
+    ; Ctyps.self_catamorphism_method
     ]$ end >>
   in
   <:str_item< class type $list:
@@ -871,20 +925,6 @@ let get_derived_classes loc plugin_classes_generator type_descriptor =
      in
      Plugin.generate_classes loc trait type_descriptor p (context.this, context.env, env_t, cproto, ce, cproto_t, ct)
   )
-
-
-(* Generate list of ctyps of type parameter transformation functions (or transforms, in
- * short.) All of those types looks like param_inh -> param -> param_syn. To generate such
- * types you need to know names, nothing more.
- *)
-let make_parameter_transform_ctyps loc names : ctyp list =
-  let module H = Plugin.Helper (struct let loc = loc end) in
-  names.Names.transformer#type_parameters
-  |> map (fun parameter -> H.T.arrow (map H.T.var [
-        names.Names.transformer#inh_for parameter;
-        parameter;
-        names.Names.transformer#syn_for parameter;
-     ]))
 
 
 (* Create object full of type parameter transformation functions.
@@ -1144,9 +1184,9 @@ let catamorphism_def_components loc
 let make_gt_record_def_components loc
                                   names
                                   type_descriptor
-                                  parameter_transform_ctyps
-                                  type_transform_ctyp =
+                                  ctyps =
   let module H = Plugin.Helper (struct let loc = loc end) in
+  let module Ctyps = (val ctyps : CTYPS) in
   let (generic_catamorphism_pattern, generic_catamorphism) =
     catamorphism_def_components loc names type_descriptor
   in
@@ -1156,9 +1196,9 @@ let make_gt_record_def_components loc
       @ map H.T.var names.Names.transformer#parameters)
     in
     let generic_catamorphism = H.T.arrow (
-      parameter_transform_ctyps
+      Ctyps.parameter_transforms
       @ [ transformer
-        ; type_transform_ctyp
+        ; Ctyps.type_transform
         ])
     in
     let gt_record = H.T.acc [H.T.id "GT"; H.T.id "t"] in
@@ -1174,6 +1214,7 @@ let make_gt_record_def_components loc
   , gt_record
   , gt_record_decl
   )
+
 
 
 let generate_definitions_for_single_type loc descrs type_name type_parameters description plugin_names =
@@ -1204,21 +1245,15 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
     default_properties = properties;
   }
   in
-  let parameter_transform_ctyps = make_parameter_transform_ctyps loc names in
-  let parameter_transforms_obj_ctyp =
-    H.T.obj (combine names.Names.transformer#methods_of_transforms_obj parameter_transform_ctyps) ~is_open_type:false
+  let module Ctyps = Make_ctyps (struct
+      let loc = loc
+      let names = names
+      let type_descriptor = type_descriptor
+    end)
   in
-  let type_instance_ctyp = H.T.app (H.T.id type_name :: map H.T.var type_parameters) in
-  let type_transform_ctyp =
-    H.T.arrow [H.T.var names.Names.transformer#inh; type_instance_ctyp; H.T.var names.Names.transformer#syn]
-  in
-  let self_catamorphism_method_ctyp =
-    let catamorphism_with_binded_transformer = H.T.arrow (parameter_transform_ctyps @ [type_transform_ctyp]) in
-    <:class_sig_item< method $lid: tmethod type_name$ : $catamorphism_with_binded_transformer$ >>
-  in
+  let ctyps = (module Ctyps : CTYPS) in
   let is_one_of_processed_mut_rec_types type_name = mem_assoc type_name descrs in
   let plugin_classes_generator = get_plugin_classes_generator loc names descrs type_descriptor in
-(* ===--------------------------------------------------------------------=== *)
   let case_descriptions = type_case_descriptions description in
   let plugin_properties_and_generators = apply_plugins loc type_descriptor plugin_names in
   case_descriptions
@@ -1230,22 +1265,7 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
                                   type_descriptor
                                   case)
   );
-(* ===--------------------------------------------------------------------=== *)
-  let metaclass_decl = metaclass loc type_name type_parameters case_descriptions in
-  let transformer_class_decl = transformer_class loc
-                                                 names.Names.transformer
-                                                 type_name
-                                                 type_instance_ctyp
-                                                 parameter_transforms_obj_ctyp
-                                                 self_catamorphism_method_ctyp
-  in
-  let gt_records_components = make_gt_record_def_components loc
-                                                            names
-                                                            type_descriptor
-                                                            parameter_transform_ctyps
-                                                            type_transform_ctyp
-  in
-  ( gt_records_components
+  ( make_gt_record_def_components loc names type_descriptor ctyps
   , begin
       let (env, protos, defs, edecls, pdecls, decls) =
         plugin_properties_and_generators
@@ -1259,8 +1279,8 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
       , flatten edecls @ pdecls @ decls
       )
     end
-  , metaclass_decl
-  , transformer_class_decl
+  , metaclass loc type_name type_parameters case_descriptions
+  , transformer_class loc names.Names.transformer type_name ctyps
   , metacatamorphism loc names type_descriptor case_descriptions
   , catamorphism_def_components loc names type_descriptor
   , transformer_virtual_class loc names type_descriptor
