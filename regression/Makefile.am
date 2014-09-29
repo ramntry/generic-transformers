@@ -7,8 +7,7 @@ test104\
 test105\
 test106\
 test107\
-test108\
-test109
+test108
 
 
 # Problematic tests: 

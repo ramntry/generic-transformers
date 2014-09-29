@@ -1216,7 +1216,6 @@ let make_gt_record_def_components loc
   )
 
 
-
 let generate_definitions_for_single_type loc descrs type_name type_parameters description plugin_names =
   Plugin.load_plugins plugin_names;
   let module H = Plugin.Helper (struct let loc = loc end) in
@@ -1269,9 +1268,7 @@ let generate_definitions_for_single_type loc descrs type_name type_parameters de
   , begin
       let (env, protos, defs, edecls, pdecls, decls) =
         plugin_properties_and_generators
-        |> map (get_derived_classes loc
-                                    plugin_classes_generator
-                                    type_descriptor)
+        |> map (get_derived_classes loc plugin_classes_generator type_descriptor)
         |> split6
       in
       ( flatten env @ protos
