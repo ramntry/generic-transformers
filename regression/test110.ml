@@ -23,3 +23,34 @@ end
 
 let free_vars : lam -> StringSet.t =
   transform(lam) (new free_vars_transformer) StringSet.empty
+;;
+
+
+@type var =
+  [ `Var of string
+  ]
+
+class ['v] var_eval_transformer = object inherit [string -> 'v, 'v] @var
+  method c_Var env _ var_name = env var_name
+end
+
+@type 'e arith =
+  [ `Add of 'e * 'e
+  | `Mul of 'e * 'e
+  ]
+
+class ['e, 'inh] arith_eval_transformer = object inherit ['e, 'inh, int, 'inh, int] @arith
+  method c_Add inh _ left right = left.fx inh + right.fx inh
+  method c_Mul inh _ left right = left.fx inh * right.fx inh
+end
+
+@type 'e expr =
+  [ var
+  | 'e arith
+  ]
+
+class ['e] expr_eval_transformer = object
+  inherit ['e, string -> int, int, string -> int, int] @expr
+  inherit [int] var_eval_transformer
+  inherit ['e, string -> int] arith_eval_transformer
+end
