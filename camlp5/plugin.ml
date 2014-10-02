@@ -296,11 +296,11 @@ module Helper (L : sig val loc : loc end) =
         let while_e     e list     = <:expr< while $e$ do { $list:list$ } >>
         let unit                   = <:expr< () >>
 
-        let gt_field f e = acc [e; uid "GT"; lid f]
+        let gt_field field_name gt_record = acc [gt_record; uid "GT"; lid field_name]
         let gt_f         = gt_field "f"
         let gt_x         = gt_field "x"
         let gt_fx        = gt_field "fx"
-        let gt_tp e p    = method_selection (gt_field "t" e) p
+        let gt_tp gt_record method_name = method_selection (gt_field "t" gt_record) method_name
 
       end
   end
@@ -326,9 +326,9 @@ let generate_classes loc trait descr (prop, generator) (this, env, env_t, b_prot
   <:sig_item< class $list:[def (trait_proto_t descr.name trait) b_proto_decl]$ >>,
   <:sig_item< class $list:[def (trait_t descr.name trait) b_decl]$ >>
 
-let generate_inherit base_class loc qname arg descr prop =
+let generate_inherit is_base_class loc qname arg descr prop =
   let args =
-    if base_class
+    if is_base_class
     then
       flatten (map (fun a -> [<:ctyp< ' $a$ >>; prop.inh_t_of_parameter a; prop.syn_t_of_parameter a]) descr.parameters) @
       [prop.inh_t; prop.syn_t]

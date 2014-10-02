@@ -310,12 +310,12 @@ module Names = struct
     new_namespace ()
 
 
-  (** Generate names for transformer classes.
+  (* Generate names for transformer classes.
    *)
   class transformer loc type_parameters =
     let generator = name_generator type_parameters in
 
-    (** Generate names for type parameters.
+    (* Generate names for type parameters.
      *)
     let attribute_parameters =
       type_parameters
@@ -339,7 +339,7 @@ module Names = struct
 
     let self = generator#generate "self" in
 
-    (** Generate names for some values.
+    (* Generate names for some values.
      *)
     let parameter_transforms_obj = generator#generate "parameter_transforms_obj" in
 
@@ -362,7 +362,7 @@ module Names = struct
       method self = self
     end
 
-  (** Generate names for metaclass.
+  (* Generate names for metaclass.
    *)
   let metaclass =
     object (self)
@@ -381,7 +381,7 @@ module Names = struct
         ]
     end
 
-  (** Generate names of generic catamorphism's actual arguments.
+  (* Generate names of generic catamorphism's actual arguments.
    *)
   class catamorphism reserved_names =
     let generator = name_generator reserved_names in
@@ -785,17 +785,17 @@ let get_plugin_classes_generator loc
           let this = H.E.coerce (H.E.id this) (H.T.app (H.T.id (trait_t type_descriptor.name trait)::map H.T.var prop.Plugin.transformer_parameters)) in
           vals @ [<:class_str_item< initializer $H.E.seq (H.E.app [H.E.lid ":="; H.E.id self; this]::inits)$ >>] @ methods
         in
-        {gen         = g;
-         this        = this;
-         self        = self;
-         env         = env;
-         env_sig     = env_methods;
-         proto_items = [];
-         items       = items;
-         defaults    = [];
-         in_cluster  = length descrs > 1;
-         self_name   = cn;
-       }
+        { gen         = g
+        ; this        = this
+        ; self        = self
+        ; env         = env
+        ; env_sig     = env_methods
+        ; proto_items = []
+        ; items       = items
+        ; defaults    = []
+        ; in_cluster  = length descrs > 1
+        ; self_name   = cn
+        }
 
     method put trait context = m := StringMap.add trait context !m
   end
@@ -803,40 +803,39 @@ let get_plugin_classes_generator loc
 
 let add_derived_member loc plugin_classes_generator is_one_of_processed_mut_rec_types type_descriptor =
   let module H = Plugin.Helper (struct let loc = loc end) in
-  (fun case (trait, (prop, generator)) ->
-    let p = from_option_with_error loc (Plugin.get trait) in
-    let context = plugin_classes_generator#get trait in
+  (fun case (plugin_name, (plugin_properties, generator)) ->
+    let context = plugin_classes_generator#get plugin_name in
     let g = context.gen#copy in
     let branch method_name met_args gen =
-      let rec env = {
-        Plugin.inh = g#generate "inh";
-        Plugin.subject = g#generate "subject";
-        Plugin.new_name = (fun s -> g#generate s);
-        Plugin.trait =
-          (fun s t ->
-             if s = trait
-             then
-               let rec inner = function
-               | Variable (_, a) -> H.E.gt_tp (H.E.id env.Plugin.subject) a
-               | Instance (_, args, qname) ->
-                   let args = map inner args in
-                   (match qname with
-                    | [t] when is_one_of_processed_mut_rec_types t && t <> type_descriptor.name ->
-                        H.E.app ((H.E.method_selection (H.E.app [H.E.lid "!"; H.E.id context.env]) (tmethod t)) :: args)
-                    | _  ->
-                        let tobj =
-                          match qname with
-                          | [t] when t = type_descriptor.name -> H.E.id "this"
-                          | _ -> H.E.new_e (map_last loc (fun name -> trait_t name trait) qname)
-                        in
-                        H.E.app ([H.E.acc (map H.E.id ["GT"; "transform"]); H.E.acc (map H.E.id qname)] @ args @ [tobj])
-                   )
-               | Self _ -> H.E.gt_f (H.E.id env.Plugin.subject)
-               | _ -> invalid_arg "Unsupported type"
-               in (try Some (inner t) with Invalid_argument "Unsupported type" -> None)
-             else None
-          )
-      }
+      let rec env =
+        { Plugin.inh = g#generate "inh"
+        ; Plugin.subject = g#generate "subject"
+        ; Plugin.new_name = (fun s -> g#generate s)
+        ; Plugin.trait =
+            (fun requested_plugin_name typ ->
+               if requested_plugin_name = plugin_name
+               then
+                 let rec inner = function
+                   | Variable (_, var_name) -> H.E.gt_tp (H.E.id env.Plugin.subject) var_name
+                   | Instance (_, parameter_typs, qname) ->
+                       let args = map inner parameter_typs in
+                       (match qname with
+                        | [t] when is_one_of_processed_mut_rec_types t && t <> type_descriptor.name ->
+                            H.E.app ((H.E.method_selection (H.E.app [H.E.lid "!"; H.E.id context.env]) (tmethod t)) :: args)
+                        | _  ->
+                            let tobj =
+                              match qname with
+                              | [t] when t = type_descriptor.name -> H.E.id "this"
+                              | _ -> H.E.new_e (map_last loc (fun name -> trait_t name plugin_name) qname)
+                            in
+                            H.E.app ([H.E.acc (map H.E.id ["GT"; "transform"]); H.E.acc (map H.E.id qname)] @ args @ [tobj])
+                       )
+                   | Self _ -> H.E.gt_f (H.E.id env.Plugin.subject)
+                   | _ -> invalid_arg "Unsupported type"
+                 in (try Some (inner typ) with Invalid_argument "Unsupported type" -> None)
+               else None
+            )
+        }
       in
       let m_def =
         let body = H.E.func (map H.P.id ([env.Plugin.inh; env.Plugin.subject] @ met_args)) (gen env) in
@@ -858,39 +857,41 @@ let add_derived_member loc plugin_classes_generator is_one_of_processed_mut_rec_
           let args = mapi (fun i a -> g#generate (sprintf "p%d" i), a) cargs in
           branch (cmethod cname) (map fst args) (fun env -> generator#constructor env cname args)
 
-      | `Type (Instance (_, args, qname)) ->
-          let args =
-            args
+      | `Type (Instance (_, parameter_typs, qualified_name)) ->
+          let parameters =
+            parameter_typs
             |> map (function
                 | Variable (_, var_name) -> var_name
                 | _ -> oops loc "context: unsupported case (non-variable in instance)")
           in (* TODO *)
-          let qname, qname_proto, env_tt, name =
-            let n, t = hdtl loc (rev qname) in
-            rev ((trait_t n trait) :: t),
-            rev ((trait_proto_t n trait) :: t),
-            rev ((env_tt n trait) :: t),
-            n
+          let (qname, qname_proto, env_tt, name) =
+            let (n, t) = hdtl loc (rev qualified_name) in
+            ( rev ((trait_t n plugin_name) :: t)
+            , rev ((trait_proto_t n plugin_name) :: t)
+            , rev ((env_tt n plugin_name) :: t)
+            , n
+            )
           in
-          let type_descriptor = { type_descriptor with
-            parameters = args;
-            name = name;
-            default_properties = prop;
-          }
+          let type_descriptor =
+            { type_descriptor with
+              parameters = parameters
+            ; name = name
+            ; default_properties = plugin_properties
+            }
           in
-          let prop = fst (p loc type_descriptor) in
-          let i_def, _ = Plugin.generate_inherit false loc qname_proto (Some (H.E.id context.self, H.T.id "unit")) type_descriptor prop in
-          let i_impl, _ = Plugin.generate_inherit false loc qname None type_descriptor prop in
-          let i_def_proto, _ = Plugin.generate_inherit false loc qname_proto (Some (H.E.id context.env, H.T.id "unit")) type_descriptor prop in
-          let _ , i_env = Plugin.generate_inherit false loc env_tt None type_descriptor prop in
-          {context with defaults = i_impl :: context.defaults;
-           items = i_def :: context.items;
-           proto_items = i_def_proto :: context.proto_items;
-           env_sig     = i_env :: context.env_sig
+          let (i_def, _) = Plugin.generate_inherit false loc qname_proto (Some (H.E.id context.self, H.T.id "unit")) type_descriptor plugin_properties in
+          let (i_impl, _) = Plugin.generate_inherit false loc qname None type_descriptor plugin_properties in
+          let (i_def_proto, _) = Plugin.generate_inherit false loc qname_proto (Some (H.E.id context.env, H.T.id "unit")) type_descriptor plugin_properties in
+          let (_ , i_env) = Plugin.generate_inherit false loc env_tt None type_descriptor plugin_properties in
+          { context with
+            defaults = i_impl :: context.defaults
+          ; items = i_def :: context.items
+          ; proto_items = i_def_proto :: context.proto_items
+          ; env_sig = i_env :: context.env_sig
           }
-      | _ -> oops loc "unsupported case (infernal error)"
+      | _ -> oops loc "unsupported case (internal error)"
     in
-    plugin_classes_generator#put trait context
+    plugin_classes_generator#put plugin_name context
   )
 
 
