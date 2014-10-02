@@ -25,6 +25,29 @@ let free_vars : lam -> StringSet.t =
   transform(lam) (new free_vars_transformer) StringSet.empty
 ;;
 
+(* subst function is not defined in main article *)
+(*
+type context = string -> string
+type mtype = context -> (context, lam, lam, < >) a -> lam
+
+class virtual reducer = object (this) inherit [context, lam] @lam
+  method virtual arg : mtype
+  method virtual subst_arg : mtype
+  method head : mtype = fun context term -> term.fx context
+
+  method c_Var _ self _ = self.x
+
+  method c_App context self left right =
+    match this#head context left with
+    | Lam (var_name, body) ->
+        self.f context
+               (subst (*???*) context var_name (this#subst_arg context right) body)
+    | other ->
+        let reduced = self.f context other in
+        App (reduced, this#arg context right)
+end
+*)
+
 
 @type var =
   [ `Var of string
@@ -39,7 +62,9 @@ end
   | `Mul of 'e * 'e
   ]
 
-class ['e, 'inh] arith_eval_transformer = object inherit ['e, 'inh, int, 'inh, int] @arith
+class ['e, 'inh] arith_eval_transformer = object
+  inherit ['e, 'inh, int, 'inh, int] @arith
+
   method c_Add inh _ left right = left.fx inh + right.fx inh
   method c_Mul inh _ left right = left.fx inh * right.fx inh
 end
@@ -54,3 +79,27 @@ class ['e] expr_eval_transformer = object
   inherit [int] var_eval_transformer
   inherit ['e, string -> int] arith_eval_transformer
 end
+
+let rec eval env expression =
+  transform(expr) eval (new expr_eval_transformer) env expression
+
+
+let test_expr = `Add (`Mul (`Var "x",
+                            `Var "y"),
+                      `Add (`Var "x",
+                            `Var "z"))
+let test_env = function
+  | "x" -> 10
+  | "y" -> 20
+  | "z" -> 30
+  | _ -> failwith "test_env: variable not found"
+
+let test_expected = 240
+let test_actual = eval test_env test_expr
+
+let my_assert : bool -> unit = fun assertion ->
+  if not assertion then
+    print_endline "[FAIL]"
+
+let () =
+  my_assert (test_actual = test_expected)
