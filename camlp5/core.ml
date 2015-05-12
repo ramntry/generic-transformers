@@ -455,6 +455,67 @@ let generic_cata_match_case loc names plugin_names pattern method_name arg_names
   (pattern, expr)
 
 
+(** Anamorphisms *)
+let ana_match_case_for loc case_description =
+  let module H = Plugin.Helper (struct let loc = loc end) in
+  match case_description with
+  | `Constructor (cname, carg_typs) ->
+      let binded_names = mapi (fun i _ -> sprintf "arg%d" i) carg_typs in
+      let constructor_tag = H.P.variant cname in
+      let pattern = H.P.app (constructor_tag :: map H.P.id binded_names) in
+      let fold_step (args, bindings) = function
+        | (Self _, arg_name) ->
+            let recursive_app =
+              match bindings with
+              | [] -> H.E.app [H.E.id "unfold"; H.E.id arg_name]
+              | (_, previous, _) :: _ -> H.E.app [H.E.id "unfold"; H.E.app [H.E.id arg_name; H.E.id previous]]
+            in
+            ( (arg_name ^ "_unfolded") :: args
+            , (arg_name ^ "_unfolded", "after_" ^ arg_name, recursive_app) :: bindings
+            )
+        | (_, arg_name) -> (arg_name :: args, bindings)
+      in
+      let (args, bindings) = fold_left fold_step ([], []) (combine carg_typs binded_names) in
+      let rem_of_seed =
+        match bindings with
+        | [] -> H.E.id "s"
+        | (_, last, _) :: _ -> H.E.id last
+      in
+      let constructor =
+        match args with
+        | [] -> H.E.id cname
+        | _ -> H.E.app [H.E.id cname; H.E.tuple (map H.E.id (rev args))]
+      in
+      let result = H.E.tuple [constructor; rem_of_seed] in
+      let body = fold_left (fun expr (res, rem, rec_app) ->
+        H.E.let_nrec [H.P.tuple [H.P.id res; H.P.id rem], rec_app] expr) result bindings
+      in
+      (pattern, body)
+
+  | _ -> oops loc "unsupported type case description for anamorphism (internal error in ana_match_case_for function"
+
+let unfold loc case_descriptions =
+  let module H = Plugin.Helper (struct let loc = loc end) in
+  let when_guard_expr = VaVal None in
+  let matching =
+    H.E.match_e
+      (H.E.app [H.E.id "step"; H.E.id "s"])
+      (case_descriptions |> (map (ana_match_case_for loc)) |> map (insert2_2 when_guard_expr))
+  in
+  H.E.func [H.P.id "s"] matching
+
+(* TODO mutual recursive types support? *)
+let anamorphism loc ((_, (_, description, _)) :: _) =
+  let module H = Plugin.Helper (struct let loc = loc end) in
+  let case_descriptions = type_case_descriptions description in
+  let body =
+    H.E.letrec
+      [H.P.id "unfold", unfold loc case_descriptions]
+      (H.E.app [H.E.id "fst"; H.E.app [H.E.id "unfold"; H.E.id "seed"]])
+  in
+  H.E.func [H.P.id "step"; H.P.id "seed"] body
+
+
 let match_case_for loc names plugin_names is_one_of_processed_mut_rec_types is_polymorphic_variant case_description =
   let module H = Plugin.Helper (struct let loc = loc end) in
   let cata_match_case = generic_cata_match_case loc names plugin_names in
@@ -1111,8 +1172,10 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
     class_defs @ (flatten protos) @ (flatten defs), flatten class_decls
   in
   let cata_def = <:str_item< value $list: [H.P.tuple pnames, H.E.letrec defs (H.E.tuple tnames)]$ >> in
+(* TODO anamorpism name should be derived from type name *)
+  let ana_def = <:str_item< value $list: [H.P.id "ana", anamorphism loc descrs]$ >> in
   let open_polymorphic_variant_types = flatten (map (open_polymorphic_variant_type loc) type_decls) in
   let type_def = <:str_item< type $list: type_decls @ open_polymorphic_variant_types$ >> in
   let type_decl = <:sig_item< type $list: type_decls @ open_polymorphic_variant_types$ >> in
-  <:str_item< declare $list: type_def :: class_defs @ [cata_def] @ metaclasses @ derived_class_defs$ end >>,
+  <:str_item< declare $list: type_def :: class_defs @ [cata_def; ana_def] @ metaclasses @ derived_class_defs$ end >>,
   <:sig_item< declare $list: type_decl :: class_decls @ decls @ derived_class_decls$ end >>
