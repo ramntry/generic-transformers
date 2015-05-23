@@ -2,7 +2,7 @@
   | Nil
   | Cons of 'a * 'a lst
 
-let custom_lst_ana = ana (function 0 -> `Nil | n -> `Cons (n, n - 1))
+let custom_lst_ana = lst_ana (fun n -> (n, n)) (fun item -> function 0 -> `Nil | n -> `Cons (item n, fun _ -> n - 1))
 
 let () =
   let expected = Cons (3, Cons (2, Cons (1, Nil))) in

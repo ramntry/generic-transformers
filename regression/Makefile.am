@@ -3,7 +3,8 @@
 #test017 test018 test019 test020 test021 test022 test023 test024 test025\
 #test026 test027 test028 test029 test030 test031 test032 test102 test110
 
-TESTS = test200 test201 test202
+TESTS = test200 test203 test204
+#TESTS = test205
 
 
 # Problematic tests: 
@@ -25,7 +26,7 @@ EXTRA_CMA += $(PACKAGE).cma
 # OCaml parser call with flags
 CAMLP5_GEN_AST_COMMAND=$(CAMLP5O) $(PARSER_INCLUDES) ../camlp5/pa_gt.cmo -L ../plugins
 CAMLP5_GEN_SRC_COMMAND=$(CAMLP5O) $(PARSER_INCLUDES) ../camlp5/pa_gt.cmo pr_o.cmo -L ../plugins
-AM_P5FLAGS = -pp "$(CAMLP5_GEN_AST_COMMAND)"
+AM_P5FLAGS = -pp "$(CAMLP5_GEN_SRC_COMMAND)"
 
 # overwrite some variables
 PXFLAGS = $(P5FLAGS)
