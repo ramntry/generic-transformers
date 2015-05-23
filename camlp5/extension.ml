@@ -45,6 +45,14 @@ EXTEND
   | ci = class_longident -> <:class_expr< $list:ci$ >>
   ]];
 
+  expr: LEVEL "expr1" [[
+    "unfold"; "("; tname = LIDENT; ")" -> <:expr< $lid: tname ^ "_ana'"$ >>
+  ]];
+
+  expr: LEVEL "expr1" [[
+    "unfold'"; "("; tname = LIDENT; ")" -> <:expr< $lid: tname ^ "_ana"$ >>
+  ]];
+
   expr: BEFORE "simple" [
    LEFTA [ "new"; i = V class_longident "list" -> <:expr< new $_list:i$ >> ]
   ];

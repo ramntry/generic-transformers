@@ -1,3 +1,5 @@
+open GT
+
 type token =
   | Comma
   | OpenP
@@ -22,12 +24,9 @@ type expr' = expr' lst expr
 
 type def' = (string lst, expr' lst) def
 
-let pass = fun x -> x
-let pass' r = fun x -> (r, x)
-
 
 let parenth_list_parser item_parser (OpenP :: stream) =
-  let until_close = lst_ana' item_parser (fun item -> function
+  let until_close = unfold(lst) item_parser (fun item -> function
     | CloseP :: _ -> `Nil
     | Comma :: xs | xs -> `Cons (item xs, pass)
   ) in
@@ -35,7 +34,7 @@ let parenth_list_parser item_parser (OpenP :: stream) =
   (l, rest)
 
 let rec expr_parser stream =
-  expr_ana' (parenth_list_parser expr_parser) (fun el -> function
+  unfold(expr) (parenth_list_parser expr_parser) (fun el -> function
     | UName constr_name :: xs -> `Constr ((constr_name, xs), fun _ -> el xs)
     | LName func_name :: OpenP :: xs -> `Call ((func_name, OpenP :: xs), fun ys -> el ys)
     | LName var_name :: xs -> `Var (var_name, xs)
@@ -43,7 +42,7 @@ let rec expr_parser stream =
 
 let def_parser =
   let var_list_parser = parenth_list_parser (fun (LName var_name) :: xs -> (var_name, xs)) in
-  def_ana' var_list_parser (parenth_list_parser expr_parser) (fun sl el -> function
+  unfold(def) var_list_parser (parenth_list_parser expr_parser) (fun sl el -> function
     | LName func_name :: OpenP :: UName constr_name :: xs ->
         `GDef ((func_name, xs), pass' constr_name, sl, fun CloseP :: ys -> expr_parser ys)
     | LName func_name :: xs -> `FDef ((func_name, xs), sl, expr_parser))

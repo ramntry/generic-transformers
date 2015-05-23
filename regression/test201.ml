@@ -1,15 +1,17 @@
+open GT
+
 @type 'a bst =
   | Null
   | Node of 'a * 'a bst * 'a bst
 
-let bst_step = function
+let bst_step = fun _ -> function
   | ([], _) -> `Null
   | (x :: xs, max) ->
       if x > max
       then `Null
-      else `Node (x, (xs, x), fun (tail, _) -> (tail, max))
+      else `Node ((x, (xs, x)), pass, fun (tail, _) -> (tail, max))
 
-let custom_bst_ana preorder = ana bst_step (preorder, max_int)
+let custom_bst_ana preorder = unfold'(bst) () bst_step (preorder, max_int)
 
 let () =
   let arg = [5; 3; 4; 7; 6; 8] in

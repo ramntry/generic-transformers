@@ -1196,6 +1196,6 @@ let generate loc (mut_rec_type_decls : (loc * type_decl * plugin_name list optio
   let ana_def = anamorphism loc descrs in
   let open_polymorphic_variant_types = flatten (map (open_polymorphic_variant_type loc) type_decls) in
   let type_def = <:str_item< type $list: type_decls @ open_polymorphic_variant_types$ >> in
-  (*let type_decl = <:sig_item< type $list: type_decls @ open_polymorphic_variant_types$ >> in*)
-  <:str_item< declare $list: type_def :: (*class_defs @ [cata_def] @*) [ana_prime_def; ana_def] (*@ metaclasses @ derived_class_defs*)$ end >>,
-  <:sig_item< declare $list: [](*type_decl :: class_decls @ decls @ derived_class_decls*)$ end >>
+  let type_decl = <:sig_item< type $list: type_decls @ open_polymorphic_variant_types$ >> in
+  <:str_item< declare $list: type_def :: class_defs @ [cata_def] @ [ana_prime_def; ana_def] @ metaclasses @ derived_class_defs$ end >>,
+  <:sig_item< declare $list: type_decl :: class_decls @ decls @ derived_class_decls$ end >>

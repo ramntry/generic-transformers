@@ -3,8 +3,7 @@
 #test017 test018 test019 test020 test021 test022 test023 test024 test025\
 #test026 test027 test028 test029 test030 test031 test032 test102 test110
 
-TESTS = test200 test203 test204
-#TESTS = test205
+TESTS = test200 test201 test203 test204 test205
 
 
 # Problematic tests: 
