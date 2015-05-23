@@ -473,7 +473,7 @@ let ana_match_case_for loc case_description =
             ( (arg_name ^ "_unfolded") :: args
             , (arg_name ^ "_unfolded", "after_" ^ arg_name, recursive_app) :: bindings
             )
-        | (Variable _, arg_name) ->
+        | (_, arg_name) ->
             let recursive_app =
               match bindings with
               | [] -> H.E.id arg_name
@@ -482,7 +482,6 @@ let ana_match_case_for loc case_description =
             ( (arg_name ^ "_unfolded") :: args
             , (arg_name ^ "_unfolded", "after_" ^ arg_name, recursive_app) :: bindings
             )
-        | (_, arg_name) -> (arg_name :: args, bindings)
       in
       let (args, bindings) = fold_left fold_step ([], []) (combine carg_typs binded_names) in
       let rem_of_seed =
